@@ -1,0 +1,221 @@
+import earcut from 'earcut';
+import { mercatorX, mercatorY, meterInMercator } from '../math/mercator';
+import { categoryIndex, type BuildingRecord, type LngLatRing } from '../model/BuildingRecord';
+import { DEFAULT_EXPOSURE_THRESHOLDS, analyzeFacades, exposureOf, type BuildingRings, type ExposureThresholds, type Point } from './FacadeAnalyzer';
+import { ROOF_STRIDE, WALL_STRIDE, type FacadeLengths, type FacadeMesh, type MeshReference } from './layout';
+import { EQUIPMENT_TYPES, generateRooftop } from './RooftopGenerator';
+
+// フットプリントから壁（窓はシェーダで描くので 1 セグメント = 1 四角形）と屋根のメッシュを作る。
+// 座標は基準点からの局所座標（m, x=東, y=北, z=上）。float32 の精度不足を避けるため（RTC）。
+// 窓の配置に必要な形状情報（連続面・前面のあき・日当たり面）は FacadeAnalyzer で全建物をまとめて解析する。
+
+export { ROOF_STRIDE, WALL_STRIDE, type FacadeMesh, type MeshReference } from './layout';
+export { mercatorX, mercatorY } from '../math/mercator';
+
+export function createReference(lng: number, lat: number): MeshReference {
+  return { mercX: mercatorX(lng), mercY: mercatorY(lat), meterInMercator: meterInMercator(lat) };
+}
+
+/** 文字列 ID → [0,1) の安定した乱数シード（FNV-1a） */
+export function hashId(id: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < id.length; i++) {
+    h ^= id.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0) / 4294967296;
+}
+
+class GrowableF32 {
+  data = new Float32Array(1 << 16);
+  length = 0;
+  reserve(n: number) {
+    if (this.length + n <= this.data.length) return;
+    let size = this.data.length * 2;
+    while (size < this.length + n) size *= 2;
+    const next = new Float32Array(size);
+    next.set(this.data.subarray(0, this.length));
+    this.data = next;
+  }
+  push(...v: number[]) {
+    this.reserve(v.length);
+    this.data.set(v, this.length);
+    this.length += v.length;
+  }
+  result() {
+    return this.data.slice(0, this.length);
+  }
+}
+class GrowableU32 {
+  data = new Uint32Array(1 << 16);
+  length = 0;
+  push(...v: number[]) {
+    if (this.length + v.length > this.data.length) {
+      const next = new Uint32Array(Math.max(this.data.length * 2, this.length + v.length));
+      next.set(this.data.subarray(0, this.length));
+      this.data = next;
+    }
+    this.data.set(v, this.length);
+    this.length += v.length;
+  }
+  result() {
+    return this.data.slice(0, this.length);
+  }
+}
+
+interface PendingBuilding {
+  record: BuildingRecord;
+  styleIndex: number;
+  polygons: BuildingRings;
+  /** 壁面の解析には使うが、メッシュは作らない（隣のタイルの建物など） */
+  obstacle: boolean;
+}
+
+export class FacadeMeshBuilder {
+  private pending: PendingBuilding[] = [];
+
+  /** @param thresholds スタイル番号ごとの壁面分類のしきい値 */
+  constructor(
+    readonly reference: MeshReference,
+    private readonly thresholds: ExposureThresholds[] = [],
+  ) {}
+
+  private thresholdsOf(styleIndex: number): ExposureThresholds {
+    return this.thresholds[styleIndex] ?? DEFAULT_EXPOSURE_THRESHOLDS;
+  }
+
+  private toLocal([lng, lat]: [number, number]): Point {
+    const r = this.reference;
+    return [(mercatorX(lng) - r.mercX) / r.meterInMercator, -(mercatorY(lat) - r.mercY) / r.meterInMercator];
+  }
+
+  add(record: BuildingRecord, styleIndex: number, options: { obstacle?: boolean } = {}): void {
+    const polygons = record.geometry.polygons
+      .map((polygon) => polygon.map((ring, i) => orient(ring.map((c) => this.toLocal(c)), i === 0)))
+      .filter((rings) => rings[0].length >= 3);
+    if (polygons.length) this.pending.push({ record, styleIndex, polygons, obstacle: options.obstacle ?? false });
+  }
+
+  build(): FacadeMesh & { facadeLengths: FacadeLengths } {
+    const walls = new GrowableF32();
+    const wallIdx = new GrowableU32();
+    const roofs = new GrowableF32();
+    const roofIdx = new GrowableU32();
+    const equipment = new GrowableF32();
+    const lights = new GrowableF32();
+    const lengths: FacadeLengths = { front: 0, side: 0, party: 0, sunSide: 0 };
+
+    const facades = analyzeFacades(
+      this.pending.map((p) => p.polygons),
+      this.pending.map((p) => p.record.height),
+      this.pending.map((p) => this.thresholdsOf(p.styleIndex)),
+    );
+
+    this.pending.forEach(({ record, styleIndex, polygons, obstacle }, bi) => {
+      if (obstacle) return;
+      const seed = hashId(record.id);
+      const cat = categoryIndex(record.category);
+      const fh = record.floorHeight ?? 3.2;
+      const top = record.height;
+      const bottom = record.minHeight;
+      const thresholds = this.thresholdsOf(styleIndex);
+      const height = top - bottom;
+      const age = buildingAge(record.yearBuilt);
+
+      // ---- 屋上設備と航空障害灯
+      const rooftop = generateRooftop({
+        polygons,
+        height,
+        storeys: record.storeys ?? Math.max(1, Math.round(height / fh)),
+        category: record.category,
+        openSided: record.openSided,
+        seed: hashId(`${record.id}:roof`),
+      });
+      for (const e of rooftop.equipment) {
+        equipment.push(e.x, e.y, top, e.w, e.d, e.h, e.angle, EQUIPMENT_TYPES.indexOf(e.type), e.rank, styleIndex, seed, height);
+      }
+      const phase = hashId(`${record.id}:light`);
+      for (const [x, y] of rooftop.lights) lights.push(x, y, top, height, phase);
+
+      polygons.forEach((rings, pi) => {
+        // ---- 壁: リングの各辺を 1 枚の四角形に。u は連続面に沿った距離
+        rings.forEach((ring, ri) => {
+          for (let i = 0; i < ring.length; i++) {
+            const [x0, y0] = ring[i];
+            const [x1, y1] = ring[(i + 1) % ring.length];
+            const len = Math.hypot(x1 - x0, y1 - y0);
+            if (len < 0.05) continue;
+            const f = facades[bi][pi][ri][i];
+            const tx = (x1 - x0) / len;
+            const ty = (y1 - y0) / len;
+            const runSeed = hashId(`${record.id}:run${f.runId}`);
+            const base = walls.length / WALL_STRIDE;
+            const v = (x: number, y: number, z: number, u: number) =>
+              walls.push(x, y, z, u, z - bottom, tx, ty, f.runLength, runSeed, styleIndex, seed, fh, cat, top - bottom, f.clearance, f.sunSide ? 1 : 0, f.coverHeight - bottom, age);
+            v(x0, y0, bottom, f.runOffset);
+            v(x1, y1, bottom, f.runOffset + len);
+            v(x1, y1, top, f.runOffset + len);
+            v(x0, y0, top, f.runOffset);
+            wallIdx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+
+            lengths[exposureOf(f.clearance, thresholds)] += len;
+            if (f.sunSide) lengths.sunSide += len;
+          }
+        });
+
+        // ---- 屋根
+        const flat: number[] = [];
+        const holes: number[] = [];
+        rings.forEach((ring, i) => {
+          if (i > 0) holes.push(flat.length / 2);
+          for (const [x, y] of ring) flat.push(x, y);
+        });
+        const tris = earcut(flat, holes, 2);
+        const base = roofs.length / ROOF_STRIDE;
+        for (let i = 0; i < flat.length; i += 2) {
+          roofs.push(flat[i], flat[i + 1], top, styleIndex, seed, cat, rooftop.axisAngle, rooftop.roofArea, height);
+        }
+        for (const t of tris) roofIdx.push(base + t);
+      });
+    });
+
+    return {
+      reference: this.reference,
+      walls: walls.result(),
+      wallIndices: wallIdx.result(),
+      roofs: roofs.result(),
+      roofIndices: roofIdx.result(),
+      equipment: equipment.result(),
+      lights: lights.result(),
+      facadeLengths: lengths,
+    };
+  }
+}
+
+/** 築年数を 0（新しい）〜1（50 年以上）に。建築年が不明なら -1（シェーダで建物ごとにばらつかせる） */
+export function buildingAge(yearBuilt: number | undefined, now = new Date().getFullYear()): number {
+  if (yearBuilt === undefined || !Number.isFinite(yearBuilt) || yearBuilt < 1800 || yearBuilt > now) return -1;
+  return Math.min(1, Math.max(0, (now - yearBuilt) / 50));
+}
+
+/** 外周は反時計回り、穴は時計回りにそろえる（上から見て）。これで外向き法線 = (ty, -tx) になる */
+function orient(ring: Point[], outer: boolean): Point[] {
+  let area = 0;
+  for (let i = 0; i < ring.length; i++) {
+    const [x0, y0] = ring[i];
+    const [x1, y1] = ring[(i + 1) % ring.length];
+    area += x0 * y1 - x1 * y0;
+  }
+  return (area > 0) === outer ? ring : [...ring].reverse();
+}
+
+/** GeoJSON の座標配列から終点の重複を除く */
+export function openRing(ring: number[][]): LngLatRing {
+  const out = ring.map((c) => [c[0], c[1]] as [number, number]);
+  if (out.length > 1) {
+    const a = out[0];
+    const b = out[out.length - 1];
+    if (a[0] === b[0] && a[1] === b[1]) out.pop();
+  }
+  return out;
+}

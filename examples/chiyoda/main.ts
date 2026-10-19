@@ -1,0 +1,254 @@
+import * as maplibregl from 'maplibre-gl';
+// maplibre-gl v6 は自身の Worker を import.meta.url 基準で探すが、本番ビルドではそのファイルが出力されないので、Vite に Worker として取り込ませて URL を渡す
+import mapLibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
+import { TOKYO_23_WARDS } from './tokyo23';
+import { BUILDING_CATEGORIES, BuildingWindowLayer, CATEGORY_COLORS, type BuildingStats, type DebugMode, type RGB } from 'maplibre-facades';
+
+maplibregl.setWorkerUrl(mapLibreWorkerUrl);
+
+const CATEGORY_LABELS: Record<string, string> = {
+  unknown: '不明',
+  office: '業務施設',
+  commercial: '商業施設',
+  hotel: '宿泊施設',
+  mixed_commercial: '商業系複合施設',
+  house: '住宅',
+  apartment: '共同住宅',
+  mixed_house: '店舗等併用住宅',
+  mixed_apartment: '店舗等併用共同住宅',
+  public: '官公庁施設',
+  education_welfare: '文教厚生施設',
+  warehouse: '運輸倉庫施設',
+  factory: '工場',
+  utility: '供給処理施設',
+  other: 'その他',
+};
+
+const VIEWS: Record<string, maplibregl.CameraOptions> = {
+  marunouchi: { center: [139.7652, 35.6812], zoom: 16.4, pitch: 68, bearing: -28 },
+  kanda: { center: [139.7697, 35.6936], zoom: 17.2, pitch: 64, bearing: 24 },
+  akihabara: { center: [139.7721, 35.6992], zoom: 17.1, pitch: 66, bearing: -38 },
+  shinjuku: { center: [139.6935, 35.6905], zoom: 16.3, pitch: 66, bearing: 30 },
+  shibuya: { center: [139.7016, 35.6590], zoom: 16.8, pitch: 64, bearing: -20 },
+  overview: { center: [139.7565, 35.6875], zoom: 14.6, pitch: 55, bearing: -15 },
+};
+
+const TOKYO_OVERVIEW: maplibregl.CameraOptions = { center: [139.735, 35.682], zoom: 12.8, pitch: 50, bearing: -10 };
+
+const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
+
+const map = new maplibregl.Map({
+  container: 'map',
+  style: {
+    version: 8,
+    sources: {
+      gsi: {
+        type: 'raster',
+        // 地理院タイル「全国最新写真（シームレス）」
+        tiles: ['https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg'],
+        tileSize: 256,
+        maxzoom: 18,
+        attribution: '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank">地理院タイル（全国最新写真）</a>',
+      },
+    },
+    layers: [
+      { id: 'background', type: 'background', paint: { 'background-color': '#0b0d12' } },
+      { id: 'gsi', type: 'raster', source: 'gsi' },
+    ],
+  },
+  ...VIEWS.marunouchi,
+  maxPitch: 80,
+  hash: true,
+  canvasContextAttributes: { antialias: true },
+});
+map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'top-right');
+map.addControl(
+  new maplibregl.AttributionControl({
+    customAttribution: '<a href="https://www.mlit.go.jp/plateau/" target="_blank">国土交通省 Project PLATEAU</a>',
+  }),
+);
+
+// データ: 既定は PLATEAU の 3D Tiles（東京23区）を直接、表示範囲だけ読む。
+// ?source=geojson で事前変換した千代田区の GeoJSON を一括で読む（データがあるときだけ。vite.config.ts を参照）
+declare const __DEMO_GEOJSON__: boolean;
+const sourceKind = __DEMO_GEOJSON__ && new URLSearchParams(location.search).get('source') === 'geojson' ? 'geojson' : '3dtiles';
+const sourceSelect = $<HTMLSelectElement>('source');
+if (!__DEMO_GEOJSON__) sourceSelect.querySelector('option[value="geojson"]')?.remove();
+sourceSelect.value = sourceKind;
+sourceSelect.addEventListener('change', () => {
+  const url = new URL(location.href);
+  url.searchParams.set('source', sourceSelect.value);
+  location.href = url.href;
+});
+
+const layer = new BuildingWindowLayer({
+  id: 'plateau-facades',
+  source:
+    sourceKind === 'geojson'
+      ? { type: 'geojson', url: `${import.meta.env.BASE_URL}data/13101_bldg_lod1.geojson` }
+      : { type: '3dtiles', url: TOKYO_23_WARDS.map((w) => w.url) },
+  adapter: { name: 'plateau' },
+  timeOfDay: 20,
+});
+// 3D Tiles ではタイルが増減するたびに凡例を更新する（まとめて 1 フレームに 1 回）
+let statsFrame = 0;
+const scheduleStats = () => {
+  if (statsFrame) return;
+  statsFrame = requestAnimationFrame(() => {
+    statsFrame = 0;
+    if (layer.stats) renderStats(layer.stats);
+  });
+};
+layer.on('load', scheduleStats).on('tileload', scheduleStats).on('tileunload', scheduleStats);
+// 開発時の確認用: タイルごとの処理時間
+const tileLog: { tileId: string; at: number; timing: unknown }[] = [];
+(window as unknown as { tileLog: typeof tileLog }).tileLog = tileLog;
+layer.on('tileload', ({ tileId, timing }) => tileLog.push({ tileId, at: performance.now(), timing }));
+layer.on('error', ({ error }) => {
+  $('errors').textContent = `読み込みに失敗しました（${error.code}）: ${error.message}`;
+});
+// 開発時の確認用
+(window as unknown as { layer: BuildingWindowLayer; map: maplibregl.Map }).layer = layer;
+(window as unknown as { layer: BuildingWindowLayer; map: maplibregl.Map }).map = map;
+
+map.on('load', () => {
+  map.addLayer(layer);
+  applyTimeOfDay(layer.timeOfDay);
+});
+
+// ---------------------------------------------------------------- 時刻と背景地図
+
+const hex = (c: RGB) =>
+  `#${c.map((v) => Math.round(Math.min(1, Math.max(0, v)) * 255).toString(16).padStart(2, '0')).join('')}`;
+
+function applyTimeOfDay(hour: number): void {
+  layer.setTimeOfDay(hour);
+  const L = layer.lightingState;
+  const h = Math.floor(hour) % 24;
+  const m = Math.floor((hour % 1) * 60);
+  $('hour-label').textContent = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+  if (!map.isStyleLoaded()) return;
+  // 背景の地理院タイルを夜は暗く
+  // 航空写真は昼はそのまま、夜は暗く彩度を落とす
+  map.setPaintProperty('gsi', 'raster-brightness-max', 1 - 0.85 * L.night - 0.15 * L.twilight);
+  map.setPaintProperty('gsi', 'raster-saturation', -0.6 * L.night);
+  map.setPaintProperty('gsi', 'raster-contrast', 0.1 * L.night);
+  map.setSky({
+    'sky-color': hex(L.skyZenith),
+    'horizon-color': hex(L.skyHorizon),
+    'fog-color': hex(L.skyHorizon),
+    'sky-horizon-blend': 0.6,
+    'horizon-fog-blend': 0.8,
+    'fog-ground-blend': 0.9,
+  });
+}
+
+const hourInput = $<HTMLInputElement>('hour');
+hourInput.addEventListener('input', () => applyTimeOfDay(Number(hourInput.value)));
+
+let lastFrame = performance.now();
+function tick(now: number) {
+  const dt = (now - lastFrame) / 1000;
+  lastFrame = now;
+  if ($<HTMLInputElement>('advance').checked) {
+    // 1 秒で 20 分進む
+    const next = (Number(hourInput.value) + dt / 3) % 24;
+    hourInput.value = String(next);
+    applyTimeOfDay(next);
+  }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+
+// ---------------------------------------------------------------- 表示切り替え
+
+$<HTMLSelectElement>('effects').addEventListener('change', (e) => layer.setEffects((e.target as HTMLSelectElement).value === 'on'));
+$<HTMLInputElement>('interior').addEventListener('change', (e) => layer.setInterior((e.target as HTMLInputElement).checked));
+const checked = (id: string) => $<HTMLInputElement>(id).checked;
+const updateRoof = () =>
+  layer.setRoof({
+    parapet: checked('roof-parapet'),
+    finish: checked('roof-finish'),
+    equipment: { enabled: checked('roof-equipment'), density: Number($<HTMLInputElement>('roof-density').value) },
+    aviationLights: { enabled: checked('roof-lights'), blink: checked('roof-blink') },
+  });
+for (const id of ['roof-parapet', 'roof-finish', 'roof-equipment', 'roof-lights', 'roof-blink']) $(id).addEventListener('change', updateRoof);
+$('roof-density').addEventListener('input', () => {
+  $('roof-density-label').textContent = Number($<HTMLInputElement>('roof-density').value).toFixed(2);
+  updateRoof();
+});
+const weatheringStrength = $<HTMLInputElement>('weathering-strength');
+const updateWeathering = () => {
+  layer.setWeathering({ enabled: $<HTMLInputElement>('weathering').checked, strength: Number(weatheringStrength.value) });
+  $('weathering-label').textContent = Number(weatheringStrength.value).toFixed(1);
+};
+$('weathering').addEventListener('change', updateWeathering);
+weatheringStrength.addEventListener('input', updateWeathering);
+
+const surfaceMaterials = $<HTMLInputElement>('surface-materials');
+const glassDistortion = $<HTMLInputElement>('glass-distortion');
+const updateSurfaceDetail = () => {
+  layer.setSurfaceDetail({
+    enabled: $<HTMLInputElement>('surface-detail').checked,
+    materials: Number(surfaceMaterials.value),
+    glassDistortion: Number(glassDistortion.value),
+  });
+  $('surface-materials-label').textContent = Number(surfaceMaterials.value).toFixed(1);
+  $('glass-distortion-label').textContent = Number(glassDistortion.value).toFixed(1);
+};
+$('surface-detail').addEventListener('change', updateSurfaceDetail);
+surfaceMaterials.addEventListener('input', updateSurfaceDetail);
+glassDistortion.addEventListener('input', updateSurfaceDetail);
+const reflectionInput = $<HTMLInputElement>('reflection');
+reflectionInput.addEventListener('input', () => {
+  layer.setReflection(Number(reflectionInput.value));
+  $('reflection-label').textContent = Number(reflectionInput.value).toFixed(1);
+});
+$<HTMLSelectElement>('debug').addEventListener('change', (e) => {
+  layer.setDebugMode((e.target as HTMLSelectElement).value as DebugMode);
+  if (layer.stats) renderStats(layer.stats);
+});
+document.querySelectorAll<HTMLButtonElement>('[data-view]').forEach((b) =>
+  b.addEventListener('click', () => {
+    // 「全体」は 3D Tiles なら 23 区、GeoJSON なら千代田区
+    const view = b.dataset.view === 'overview' && sourceKind === '3dtiles' ? TOKYO_OVERVIEW : VIEWS[b.dataset.view!];
+    map.flyTo({ ...view, duration: 2500, essential: true });
+  }),
+);
+
+// ---------------------------------------------------------------- 統計・凡例
+
+const km = (m: number) => `${(m / 1000).toFixed(1)} km`;
+
+function renderStats(stats: BuildingStats): void {
+  const mode = $<HTMLSelectElement>('debug').value as DebugMode;
+  let title: string;
+  let rows: (readonly [RGB, string, string])[];
+  if (mode === 'facade') {
+    const f = stats.facades;
+    title = '壁面の分類（地上部の延長）';
+    rows = [
+      [layer.debugColor('facade', 'sunSide'), '正面（日当たり面）', km(f.sunSide)],
+      [layer.debugColor('facade', 'front'), '正面（その他）', km(f.front - f.sunSide)],
+      [layer.debugColor('facade', 'side'), '側壁（狭い隙間に面する）', km(f.side)],
+      [layer.debugColor('facade', 'party'), '界壁（隣と接する）', km(f.party)],
+    ];
+  } else if (mode === 'style') {
+    title = `ファサードスタイル — ${stats.total.toLocaleString()} 棟`;
+    rows = Object.entries(stats.byStyle)
+      .sort((a, b) => b[1] - a[1])
+      .map(([name, n]) => [layer.debugColor('style', name), name, n.toLocaleString()] as const);
+  } else {
+    title = `用途（共通カテゴリ） — ${stats.total.toLocaleString()} 棟`;
+    rows = BUILDING_CATEGORIES.filter((c) => stats.byCategory[c])
+      .sort((a, b) => stats.byCategory[b] - stats.byCategory[a])
+      .map((c) => [CATEGORY_COLORS[c], CATEGORY_LABELS[c], stats.byCategory[c].toLocaleString()] as const);
+  }
+  $('stats').innerHTML = `
+    <h2>${title}</h2>
+    <table>${rows
+      .map(([c, label, n]) => `<tr><td><span class="chip" style="background:${hex(c)}"></span>${label}</td><td class="num">${n}</td></tr>`)
+      .join('')}</table>
+    <p class="muted">推定値: 高さ ${stats.estimated.height} / 階数 ${stats.estimated.storeys} / 用途 ${stats.estimated.category} 棟</p>
+    ${sourceKind === '3dtiles' ? `<p class="muted">タイル: 表示 ${layer.tileStatus.rendered} / 読み込み中 ${layer.tileStatus.loading} / 保持 ${layer.tileStatus.cached}</p>` : ''}`;
+}

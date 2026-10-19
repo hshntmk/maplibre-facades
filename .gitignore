@@ -1,0 +1,15 @@
+node_modules/
+dist/
+examples/chiyoda/dist/
+
+# PLATEAU から取得・変換したデータ（npm run prepare-data / scripts/make-implicit-sample.mjs で作る）
+data/
+examples/chiyoda/public/data/
+
+# 開発環境
+.idea/
+.claude/
+.playwright-mcp/
+.DS_Store
+*.log
+coverage/

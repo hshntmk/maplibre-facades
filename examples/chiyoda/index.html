@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PLATEAU Facades – 東京23区</title>
+    <link rel="stylesheet" href="./demo.css" />
+  </head>
+  <body>
+    <div id="map"></div>
+    <aside id="panel">
+      <h1>PLATEAU Facades <span>東京23区 試作</span></h1>
+
+      <section>
+        <label class="row">
+          <span>時刻</span>
+          <output id="hour-label">20:00</output>
+        </label>
+        <input id="hour" type="range" min="0" max="24" step="0.05" value="20" />
+        <label class="check"><input id="advance" type="checkbox" /> 時間を進める</label>
+      </section>
+
+      <section>
+        <h2>データ</h2>
+        <div class="row">
+          <select id="source">
+            <option value="3dtiles">3D Tiles: 東京23区（PLATEAU から直接・表示範囲だけ）</option>
+            <option value="geojson">GeoJSON: 千代田区のみ（事前変換・一括）</option>
+          </select>
+        </div>
+        <p id="errors" style="color:#ff8a80;margin:4px 0 0"></p>
+      </section>
+
+      <section>
+        <h2>表示</h2>
+        <div class="row">
+          <select id="effects">
+            <option value="on">建物: 効果あり（窓・室内・反射・屋上）</option>
+            <option value="off">建物: 効果なし（単色）</option>
+          </select>
+        </div>
+        <label class="check"><input id="interior" type="checkbox" checked /> 室内（インテリアマッピング）</label>
+        <label class="check"><input id="weathering" type="checkbox" checked /> 壁のくすみ（雨だれ・汚れ・しみ）</label>
+        <label class="row"><span>くすみの強さ</span><output id="weathering-label">1.0</output></label>
+        <input id="weathering-strength" type="range" min="0" max="2" step="0.1" value="1" />
+        <label class="check"><input id="surface-detail" type="checkbox" checked /> 表面の細部（タイルの凹凸・つや、ガラスの歪み）</label>
+        <label class="row"><span>素材の強さ</span><output id="surface-materials-label">1.0</output></label>
+        <input id="surface-materials" type="range" min="0" max="2" step="0.1" value="1" />
+        <label class="row"><span>ガラスの歪み</span><output id="glass-distortion-label">1.0</output></label>
+        <input id="glass-distortion" type="range" min="0" max="3" step="0.1" value="1" />
+        <label class="row"><span>ガラスの反射</span><output id="reflection-label">1.0</output></label>
+        <input id="reflection" type="range" min="0" max="3" step="0.1" value="1" />
+        <h2 style="margin-top:10px">屋上</h2>
+        <label class="check"><input id="roof-parapet" type="checkbox" checked /> パラペット</label>
+        <label class="check"><input id="roof-finish" type="checkbox" checked /> 仕上げ（防水・天窓・太陽光）</label>
+        <label class="check"><input id="roof-equipment" type="checkbox" checked /> 屋上設備</label>
+        <label class="row"><span>設備の密度</span><output id="roof-density-label">0.7</output></label>
+        <input id="roof-density" type="range" min="0" max="1" step="0.05" value="0.7" />
+        <label class="check"><input id="roof-lights" type="checkbox" checked /> 航空障害灯（60m 以上）</label>
+        <label class="check"><input id="roof-blink" type="checkbox" checked /> 点滅</label>
+        <div class="row">
+          <select id="debug">
+            <option value="none">通常</option>
+            <option value="category">用途で色分け</option>
+            <option value="style">ファサードスタイルで色分け</option>
+            <option value="facade">壁面の分類と窓の配置</option>
+          </select>
+        </div>
+        <div class="row views">
+          <button data-view="marunouchi">丸の内</button>
+          <button data-view="kanda">神田</button>
+          <button data-view="akihabara">秋葉原</button>
+        </div>
+        <div class="row views">
+          <button data-view="shinjuku">新宿</button>
+          <button data-view="shibuya">渋谷</button>
+          <button data-view="overview">全体</button>
+        </div>
+      </section>
+
+      <section id="stats"><p class="muted">PLATEAU データを読み込み中…</p></section>
+
+      <footer>
+        出典: 国土交通省 Project PLATEAU（建築物モデル 東京23区 2025）/ 背景: 地理院タイル（全国最新写真）
+      </footer>
+    </aside>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

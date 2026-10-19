@@ -1,0 +1,75 @@
+{
+  "name": "maplibre-facades",
+  "version": "0.1.0",
+  "description": "MapLibre GL JS custom layer that procedurally decorates buildings: facades with windows generated from building type and shape, interior mapping, glass reflection, night lighting, rooftops, weathering and surface detail (PLATEAU-ready).",
+  "license": "MIT",
+  "author": "hshntmk",
+  "homepage": "https://hshntmk.github.io/maplibre-facades/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hshntmk/maplibre-facades.git"
+  },
+  "bugs": {
+    "url": "https://github.com/hshntmk/maplibre-facades/issues"
+  },
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/types/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./worker": "./dist/worker.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "keywords": [
+    "maplibre",
+    "maplibre-gl",
+    "webgl",
+    "buildings",
+    "facades",
+    "windows",
+    "interior-mapping",
+    "plateau",
+    "3d"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "vite --config examples/chiyoda/vite.config.ts",
+    "demo:build": "vite build --config examples/chiyoda/vite.config.ts",
+    "demo:preview": "vite preview --config examples/chiyoda/vite.config.ts",
+    "build": "vite build && vite build --config vite.worker.config.ts && tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "prepare-data": "node scripts/prepare-plateau.mjs",
+    "prepack": "npm run typecheck && npm test && npm run build"
+  },
+  "peerDependencies": {
+    "maplibre-gl": "^5.0.0 || ^6.0.0"
+  },
+  "dependencies": {
+    "@maplibre/maplibre-gl-style-spec": "^26.4.4"
+  },
+  "devDependencies": {
+    "@types/draco3d": "^1.4.10",
+    "@types/node": "^26.6.4",
+    "draco3d": "^1.5.7",
+    "draco3dgltf": "^1.5.7",
+    "earcut": "^3.2.4",
+    "maplibre-gl": "^6.12.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.2",
+    "vitest": "^5.0.3"
+  }
+}
