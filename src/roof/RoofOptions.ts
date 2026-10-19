@@ -1,4 +1,4 @@
-import { BuildingWindowLayerError } from '../errors';
+import { BuildingFacadeLayerError } from '../errors';
 import type { RGB } from '../style/FacadeStyle';
 
 // 屋上表現のレイヤー全体の設定。いずれも描画時のパラメータなので、変更してもデータの再読み込みは起きない。
@@ -77,7 +77,7 @@ export function resolveRoofOptions(options: RoofOptions | undefined, base: Resol
 }
 
 const fail = (message: string): never => {
-  throw new BuildingWindowLayerError('options', message);
+  throw new BuildingFacadeLayerError('options', message);
 };
 const checkRange = (path: string, v: unknown, min: number, max: number) => {
   if (typeof v !== 'number' || !Number.isFinite(v) || v < min || v > max) fail(`${path} must be a number between ${min} and ${max} (got ${JSON.stringify(v)})`);

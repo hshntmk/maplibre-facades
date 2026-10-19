@@ -2,7 +2,7 @@ import * as maplibregl from 'maplibre-gl';
 // maplibre-gl v6 は自身の Worker を import.meta.url 基準で探すが、本番ビルドではそのファイルが出力されないので、Vite に Worker として取り込ませて URL を渡す
 import mapLibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import { TOKYO_23_WARDS } from './tokyo23';
-import { BUILDING_CATEGORIES, BuildingWindowLayer, CATEGORY_COLORS, type BuildingStats, type DebugMode, type RGB } from 'maplibre-facades';
+import { BUILDING_CATEGORIES, BuildingFacadeLayer, CATEGORY_COLORS, type BuildingStats, type DebugMode, type RGB } from 'maplibre-facades';
 
 maplibregl.setWorkerUrl(mapLibreWorkerUrl);
 
@@ -81,7 +81,7 @@ sourceSelect.addEventListener('change', () => {
   location.href = url.href;
 });
 
-const layer = new BuildingWindowLayer({
+const layer = new BuildingFacadeLayer({
   id: 'plateau-facades',
   source:
     sourceKind === 'geojson'
@@ -108,8 +108,8 @@ layer.on('error', ({ error }) => {
   $('errors').textContent = `読み込みに失敗しました（${error.code}）: ${error.message}`;
 });
 // 開発時の確認用
-(window as unknown as { layer: BuildingWindowLayer; map: maplibregl.Map }).layer = layer;
-(window as unknown as { layer: BuildingWindowLayer; map: maplibregl.Map }).map = map;
+(window as unknown as { layer: BuildingFacadeLayer; map: maplibregl.Map }).layer = layer;
+(window as unknown as { layer: BuildingFacadeLayer; map: maplibregl.Map }).map = map;
 
 map.on('load', () => {
   map.addLayer(layer);

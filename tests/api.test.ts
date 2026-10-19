@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { BuildingWindowLayerError } from '../src/errors';
-import { BuildingWindowLayer } from '../src/layer/BuildingWindowLayer';
+import { BuildingFacadeLayerError } from '../src/errors';
+import { BuildingFacadeLayer } from '../src/layer/BuildingFacadeLayer';
 import { Evented } from '../src/layer/Evented';
 import { MAX_STYLES, validateLayerOptions } from '../src/layer/validateOptions';
 import { createMat4, invert, multiply, translateScale } from '../src/math/mat4';
@@ -8,19 +8,19 @@ import { STYLE_TEXELS, packStyle } from '../src/style/FacadeStyle';
 import { DEFAULT_STYLE_RULES, PRESET_STYLES } from '../src/style/presets';
 
 const valid = {
-  id: 'windows',
+  id: 'facades',
   source: { type: 'geojson', url: '/data.geojson' },
   styles: PRESET_STYLES,
   styleRules: DEFAULT_STYLE_RULES,
 };
 
-const optionsError = (fn: () => void): BuildingWindowLayerError => {
+const optionsError = (fn: () => void): BuildingFacadeLayerError => {
   try {
     fn();
   } catch (e) {
-    expect(e).toBeInstanceOf(BuildingWindowLayerError);
-    expect((e as BuildingWindowLayerError).code).toBe('options');
-    return e as BuildingWindowLayerError;
+    expect(e).toBeInstanceOf(BuildingFacadeLayerError);
+    expect((e as BuildingFacadeLayerError).code).toBe('options');
+    return e as BuildingFacadeLayerError;
   }
   throw new Error('expected an options error');
 };
@@ -79,78 +79,78 @@ describe('validateLayerOptions', () => {
   });
 });
 
-describe('BuildingWindowLayer: reflection', () => {
+describe('BuildingFacadeLayer: reflection', () => {
   const source = { type: 'geojson' as const, url: '/data.geojson' };
 
   it('defaults to 1 and can be changed', () => {
-    const layer = new BuildingWindowLayer({ id: 'w', source });
+    const layer = new BuildingFacadeLayer({ id: 'w', source });
     expect(layer.reflection).toBe(1);
     expect(layer.setReflection(2.5).reflection).toBe(2.5);
     expect(layer.setReflection(0).reflection).toBe(0);
   });
 
   it('rejects out-of-range values', () => {
-    optionsError(() => new BuildingWindowLayer({ id: 'w', source, reflection: -0.5 }));
-    optionsError(() => new BuildingWindowLayer({ id: 'w', source }).setReflection(4));
-    optionsError(() => new BuildingWindowLayer({ id: 'w', source }).setReflection(Number.NaN));
+    optionsError(() => new BuildingFacadeLayer({ id: 'w', source, reflection: -0.5 }));
+    optionsError(() => new BuildingFacadeLayer({ id: 'w', source }).setReflection(4));
+    optionsError(() => new BuildingFacadeLayer({ id: 'w', source }).setReflection(Number.NaN));
   });
 });
 
-describe('BuildingWindowLayer: effects', () => {
+describe('BuildingFacadeLayer: effects', () => {
   const source = { type: 'geojson' as const, url: '/data.geojson' };
 
   it('defaults to on and can be switched off', () => {
-    const layer = new BuildingWindowLayer({ id: 'w', source });
+    const layer = new BuildingFacadeLayer({ id: 'w', source });
     expect(layer.effects).toBe(true);
     expect(layer.setEffects(false).effects).toBe(false);
-    expect(new BuildingWindowLayer({ id: 'w', source, effects: false }).effects).toBe(false);
+    expect(new BuildingFacadeLayer({ id: 'w', source, effects: false }).effects).toBe(false);
   });
 
   it('rejects non-boolean values', () => {
-    optionsError(() => new BuildingWindowLayer({ id: 'w', source, effects: 'no' as never }));
-    optionsError(() => new BuildingWindowLayer({ id: 'w', source }).setEffects(0 as never));
+    optionsError(() => new BuildingFacadeLayer({ id: 'w', source, effects: 'no' as never }));
+    optionsError(() => new BuildingFacadeLayer({ id: 'w', source }).setEffects(0 as never));
   });
 });
 
-describe('BuildingWindowLayer: weathering', () => {
+describe('BuildingFacadeLayer: weathering', () => {
   const source = { type: 'geojson' as const, url: '/data.geojson' };
 
   it('is on by default and merges partial settings', () => {
-    const layer = new BuildingWindowLayer({ id: 'w', source });
+    const layer = new BuildingFacadeLayer({ id: 'w', source });
     expect(layer.weathering).toEqual({ enabled: true, strength: 1, streaks: 1, grime: 1, stains: 1 });
     layer.setWeathering({ strength: 1.5, stains: 0 });
     expect(layer.weathering).toEqual({ enabled: true, strength: 1.5, streaks: 1, grime: 1, stains: 0 });
     layer.setWeathering(false);
     expect(layer.weathering.enabled).toBe(false);
     expect(layer.weathering.strength).toBe(1.5);
-    expect(new BuildingWindowLayer({ id: 'w', source, weathering: false }).weathering.enabled).toBe(false);
+    expect(new BuildingFacadeLayer({ id: 'w', source, weathering: false }).weathering.enabled).toBe(false);
   });
 
   it('rejects out-of-range values', () => {
-    optionsError(() => new BuildingWindowLayer({ id: 'w', source, weathering: { strength: 3 } }));
-    optionsError(() => new BuildingWindowLayer({ id: 'w', source }).setWeathering({ streaks: -0.1 }));
+    optionsError(() => new BuildingFacadeLayer({ id: 'w', source, weathering: { strength: 3 } }));
+    optionsError(() => new BuildingFacadeLayer({ id: 'w', source }).setWeathering({ streaks: -0.1 }));
     optionsError(() =>
       validateLayerOptions({ ...valid, styles: { ...PRESET_STYLES, office: { ...PRESET_STYLES.office, weathering: 1.2 } } }),
     );
   });
 });
 
-describe('BuildingWindowLayer: surfaceDetail', () => {
+describe('BuildingFacadeLayer: surfaceDetail', () => {
   const source = { type: 'geojson' as const, url: '/data.geojson' };
 
   it('is on by default and merges partial settings', () => {
-    const layer = new BuildingWindowLayer({ id: 'w', source });
+    const layer = new BuildingFacadeLayer({ id: 'w', source });
     expect(layer.surfaceDetail).toEqual({ enabled: true, materials: 1, glassDistortion: 1 });
     layer.setSurfaceDetail({ glassDistortion: 2 });
     expect(layer.surfaceDetail).toEqual({ enabled: true, materials: 1, glassDistortion: 2 });
     layer.setSurfaceDetail(false);
     expect(layer.surfaceDetail).toEqual({ enabled: false, materials: 1, glassDistortion: 2 });
-    expect(new BuildingWindowLayer({ id: 'w', source, surfaceDetail: { materials: 0.5 } }).surfaceDetail.materials).toBe(0.5);
+    expect(new BuildingFacadeLayer({ id: 'w', source, surfaceDetail: { materials: 0.5 } }).surfaceDetail.materials).toBe(0.5);
   });
 
   it('rejects out-of-range values and unknown materials', () => {
-    optionsError(() => new BuildingWindowLayer({ id: 'w', source, surfaceDetail: { materials: 2.5 } }));
-    optionsError(() => new BuildingWindowLayer({ id: 'w', source }).setSurfaceDetail({ glassDistortion: -1 }));
+    optionsError(() => new BuildingFacadeLayer({ id: 'w', source, surfaceDetail: { materials: 2.5 } }));
+    optionsError(() => new BuildingFacadeLayer({ id: 'w', source }).setSurfaceDetail({ glassDistortion: -1 }));
     const withMaterials = (wallMaterials: unknown) =>
       validateLayerOptions({ ...valid, styles: { ...PRESET_STYLES, office: { ...PRESET_STYLES.office, wallMaterials: wallMaterials as never } } });
     expect(() => withMaterials({ tile: 1 })).not.toThrow();
@@ -164,27 +164,27 @@ describe('BuildingWindowLayer: surfaceDetail', () => {
   });
 });
 
-describe('BuildingWindowLayer: interior', () => {
+describe('BuildingFacadeLayer: interior', () => {
   const source = { type: 'geojson' as const, url: '/data.geojson' };
 
   it('accepts booleans and rejects other values', () => {
-    expect(() => new BuildingWindowLayer({ id: 'w', source, interior: false }).setInterior(true)).not.toThrow();
-    expect(optionsError(() => new BuildingWindowLayer({ id: 'w', source, interior: 'no' as never })).message).toContain('interior');
-    expect(optionsError(() => new BuildingWindowLayer({ id: 'w', source }).setInterior(0 as never)).message).toContain('interior');
+    expect(() => new BuildingFacadeLayer({ id: 'w', source, interior: false }).setInterior(true)).not.toThrow();
+    expect(optionsError(() => new BuildingFacadeLayer({ id: 'w', source, interior: 'no' as never })).message).toContain('interior');
+    expect(optionsError(() => new BuildingFacadeLayer({ id: 'w', source }).setInterior(0 as never)).message).toContain('interior');
   });
 });
 
-describe('BuildingWindowLayer: debug', () => {
+describe('BuildingFacadeLayer: debug', () => {
   const source = { type: 'geojson' as const, url: '/data.geojson' };
 
   it('rejects unknown modes in the constructor and in setDebugMode', () => {
-    expect(() => new BuildingWindowLayer({ id: 'w', source, debug: 'facade' })).not.toThrow();
-    expect(optionsError(() => new BuildingWindowLayer({ id: 'w', source, debug: 'walls' as never })).message).toContain('debug mode');
-    optionsError(() => new BuildingWindowLayer({ id: 'w', source }).setDebugMode('walls' as never));
+    expect(() => new BuildingFacadeLayer({ id: 'w', source, debug: 'facade' })).not.toThrow();
+    expect(optionsError(() => new BuildingFacadeLayer({ id: 'w', source, debug: 'walls' as never })).message).toContain('debug mode');
+    optionsError(() => new BuildingFacadeLayer({ id: 'w', source }).setDebugMode('walls' as never));
   });
 });
 
-describe('BuildingWindowLayer: dracoWasmUrl', () => {
+describe('BuildingFacadeLayer: dracoWasmUrl', () => {
   it('resolves a relative URL against the page before sending it to the worker', () => {
     const posted: unknown[] = [];
     vi.stubGlobal('document', { baseURI: 'https://example.com/app/index.html' });
@@ -197,7 +197,7 @@ describe('BuildingWindowLayer: dracoWasmUrl', () => {
       },
     );
     try {
-      const layer = new BuildingWindowLayer({
+      const layer = new BuildingFacadeLayer({
         id: 'w',
         source: { type: '3dtiles', url: '/tileset.json', dracoWasmUrl: 'wasm/draco_decoder.wasm' },
         workerUrl: '/worker.js',
@@ -210,22 +210,22 @@ describe('BuildingWindowLayer: dracoWasmUrl', () => {
   });
 });
 
-describe('BuildingWindowLayer: worker init errors', () => {
+describe('BuildingFacadeLayer: worker init errors', () => {
   const source = { type: 'geojson' as const, url: '/data.geojson' };
 
   it('emits the error code reported by the worker once', () => {
-    const layer = new BuildingWindowLayer({ id: 'w', source });
+    const layer = new BuildingFacadeLayer({ id: 'w', source });
     const listener = vi.fn();
     layer.on('error', listener);
     (layer as unknown as { onWorkerMessage(msg: unknown): void }).onWorkerMessage({ type: 'initError', code: 'style', message: 'styleRules[0].when: bad' });
     expect(listener).toHaveBeenCalledOnce();
     const { error } = listener.mock.calls[0][0];
-    expect(error).toBeInstanceOf(BuildingWindowLayerError);
+    expect(error).toBeInstanceOf(BuildingFacadeLayerError);
     expect(error.code).toBe('style');
   });
 
   // Worker を差し替えて、読み込み中のタイルがある状態で Worker が止まる場合を再現する
-  const withFakeWorker = (run: (ctx: { layer: BuildingWindowLayer; posted: unknown[]; workers: { onerror?: (ev: unknown) => void; terminated: boolean }[] }) => void) => {
+  const withFakeWorker = (run: (ctx: { layer: BuildingFacadeLayer; posted: unknown[]; workers: { onerror?: (ev: unknown) => void; terminated: boolean }[] }) => void) => {
     const posted: unknown[] = [];
     const workers: { onerror?: (ev: unknown) => void; terminated: boolean }[] = [];
     vi.stubGlobal('document', { baseURI: 'https://example.com/' });
@@ -246,7 +246,7 @@ describe('BuildingWindowLayer: worker init errors', () => {
       },
     );
     try {
-      const layer = new BuildingWindowLayer({ id: 'w', source: { type: '3dtiles', url: '/tileset.json' }, workerUrl: '/worker.js' });
+      const layer = new BuildingFacadeLayer({ id: 'w', source: { type: '3dtiles', url: '/tileset.json' }, workerUrl: '/worker.js' });
       layer.on('error', () => {});
       (layer as unknown as { startWorker(): boolean }).startWorker();
       run({ layer, posted, workers });
@@ -255,7 +255,7 @@ describe('BuildingWindowLayer: worker init errors', () => {
     }
   };
   const node = (id: string) => ({ id, contentUrl: `https://example.com/${id}.glb`, geometricError: 0, refine: 'REPLACE', depth: 0, children: [], bounds: {} });
-  const internal = (layer: BuildingWindowLayer) =>
+  const internal = (layer: BuildingFacadeLayer) =>
     layer as unknown as { requestTile(n: unknown): void; onWorkerMessage(msg: unknown): void; inFlight: number };
 
   it('drops pending tiles and stops requesting new ones after an init error', () => {

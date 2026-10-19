@@ -1,4 +1,4 @@
-import { BuildingWindowLayerError } from '../errors';
+import { BuildingFacadeLayerError } from '../errors';
 import type { GeoJsonSourceConfig, SourceFeature } from './SourceConfig';
 import { openRing } from '../mesh/FacadeMeshBuilder';
 
@@ -18,9 +18,9 @@ export async function* readGeoJsonSource(config: GeoJsonSourceConfig): AsyncGene
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     fc = await res.json();
   } catch (e) {
-    throw new BuildingWindowLayerError('source', `Failed to load ${config.url}: ${e instanceof Error ? e.message : e}`, { cause: e });
+    throw new BuildingFacadeLayerError('source', `Failed to load ${config.url}: ${e instanceof Error ? e.message : e}`, { cause: e });
   }
-  if (!Array.isArray(fc.features)) throw new BuildingWindowLayerError('source', `${config.url} is not a GeoJSON FeatureCollection`);
+  if (!Array.isArray(fc.features)) throw new BuildingFacadeLayerError('source', `${config.url} is not a GeoJSON FeatureCollection`);
   for (const f of fc.features) {
     if (!f.geometry) continue;
     const polys = f.geometry.type === 'Polygon' ? [f.geometry.coordinates] : f.geometry.type === 'MultiPolygon' ? f.geometry.coordinates : [];

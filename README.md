@@ -40,12 +40,12 @@ npm install ../maplibre-facades maplibre-gl
 
 ```ts
 import { Map } from 'maplibre-gl';
-import { BuildingWindowLayer } from 'maplibre-facades';
+import { BuildingFacadeLayer } from 'maplibre-facades';
 
 const map = new Map({ container: 'map', style: '...', center: [139.7652, 35.6812], zoom: 16, pitch: 60 });
 
-const layer = new BuildingWindowLayer({
-  id: 'windows',
+const layer = new BuildingFacadeLayer({
+  id: 'facades',
   // PLATEAU の 3D Tiles（LOD1）の tileset.json を直接指定する。表示範囲のタイルだけ読み込む
   source: { type: '3dtiles', url: 'https://assets.cms.plateau.reearth.io/.../13101_chiyoda-ku_lod1/tileset.json' },
   // 複数の区: url: [chiyodaTilesetUrl, chuoTilesetUrl, ...]
@@ -106,17 +106,17 @@ layer.on('tileload', ({ tileId, timing }) => console.log(tileId, timing));
 | `loaded` / `stats` / `tileStatus` / `effects` / `timeOfDay` / `reflection` / `roof` / `weathering` / `surfaceDetail` / `lightingState` | 状態の取得。`lightingState` は背景地図や空の色を合わせるのに使える |
 | `on / off / once` | イベント: `load`（最初の表示範囲の読み込み完了）, `tileload`, `tileunload`, `error` |
 
-設定エラーはコンストラクタで同期的に `BuildingWindowLayerError`（`code: 'options'`）として投げられます。
+設定エラーはコンストラクタで同期的に `BuildingFacadeLayerError`（`code: 'options'`）として投げられます。
 読み込み後に起きるエラーは `error` イベントで通知され、`code` は `source` / `adapter` / `style` / `worker` / `webgl` のいずれかです。
 `error` のリスナーがない場合は `console.error` に出力されます。
 
 ### 見た目のカスタマイズ
 
 ```ts
-import { BuildingWindowLayer, PRESET_STYLES, DEFAULT_STYLE_RULES } from 'maplibre-facades';
+import { BuildingFacadeLayer, PRESET_STYLES, DEFAULT_STYLE_RULES } from 'maplibre-facades';
 
-new BuildingWindowLayer({
-  id: 'windows',
+new BuildingFacadeLayer({
+  id: 'facades',
   source: { type: 'geojson', url: '/buildings.geojson' },
   styles: {
     ...PRESET_STYLES,
@@ -178,8 +178,8 @@ office: {
 ## 屋上
 
 ```ts
-const layer = new BuildingWindowLayer({
-  id: 'windows',
+const layer = new BuildingFacadeLayer({
+  id: 'facades',
   source,
   roof: {
     parapet: { height: 1.1 },                 // true / false でも指定できる
@@ -222,7 +222,7 @@ layer.setRoof({ equipment: { density: 0.2 } });
 古さは建築年（`BuildingRecord.yearBuilt`）があれば 50 年で最大になり、なければ建物ごとにばらつかせます。
 
 ```ts
-new BuildingWindowLayer({ id: 'windows', source, weathering: { strength: 1.2, stains: 0.5 } });
+new BuildingFacadeLayer({ id: 'facades', source, weathering: { strength: 1.2, stains: 0.5 } });
 layer.setWeathering({ strength: 2 });   // 指定した項目だけ変わる
 layer.setWeathering(false);             // OFF
 ```
@@ -251,7 +251,7 @@ layer.setWeathering(false);             // OFF
 向かいの建物や太陽の映り込みがガラスごとに少しずつずれ、1 枚の鏡ではなく板の集まりに見えます。テクスチャは使いません。
 
 ```ts
-new BuildingWindowLayer({ id: 'windows', source, surfaceDetail: { materials: 1.5, glassDistortion: 0.5 } });
+new BuildingFacadeLayer({ id: 'facades', source, surfaceDetail: { materials: 1.5, glassDistortion: 0.5 } });
 layer.setSurfaceDetail({ glassDistortion: 0 }); // 指定した項目だけ変わる
 layer.setSurfaceDetail(false);                  // OFF
 ```
@@ -275,7 +275,7 @@ layer.setSurfaceDetail(false);                  // OFF
   夜は外が暗いので、点灯している部屋がよく見えます。
 
 ```ts
-const layer = new BuildingWindowLayer({ id: 'windows', source, reflection: 1.5 });
+const layer = new BuildingFacadeLayer({ id: 'facades', source, reflection: 1.5 });
 layer.setReflection(0); // 反射なし（常に室内が見える）
 ```
 
@@ -379,14 +379,14 @@ npm run build          # dist/index.js, dist/worker.js, dist/types/
 ```
 
 ```
-Source ─▶ Adapter ─▶ Enricher ─▶ StyleResolver ─▶ MeshBuilder ─▶ BuildingWindowLayer
+Source ─▶ Adapter ─▶ Enricher ─▶ StyleResolver ─▶ MeshBuilder ─▶ BuildingFacadeLayer
 (取得)     (正規化)    (欠損補完)    (見た目の選択)     (Worker 内)       (WebGL2 描画)
 ```
 
 | パス | 役割 |
 |---|---|
 | `src/index.ts` | 公開 API。ここから export していないものは内部実装 |
-| `src/layer/` | `BuildingWindowLayer`（CustomLayerInterface）、イベント、設定の検証 |
+| `src/layer/` | `BuildingFacadeLayer`（CustomLayerInterface）、イベント、設定の検証 |
 | `src/sources/` | データソース。`tiles3d/` に tileset の読み込み・タイルの選択（メインスレッド）と、b3dm / glb の解析・フットプリントの復元（Worker） |
 | `src/adapters/` | ソース固有属性 → 共通モデル。`plateau/` にコード表と年度別の候補キー |
 | `src/enrich/` | 高さ・階数・階高の推定（推定したかどうかを `provenance` に記録） |

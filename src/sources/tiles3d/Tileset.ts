@@ -1,4 +1,4 @@
-import { BuildingWindowLayerError } from '../../errors';
+import { BuildingFacadeLayerError } from '../../errors';
 import { toBounds, type BoundingVolumeJson } from './bounds';
 import { createImplicitTile, type ImplicitTilingJson } from './implicit';
 
@@ -46,7 +46,7 @@ interface TileJson {
 }
 
 const fail = (message: string, cause?: unknown): never => {
-  throw new BuildingWindowLayerError('source', message, { cause });
+  throw new BuildingFacadeLayerError('source', message, { cause });
 };
 
 function multiply(a: number[] | undefined, b: number[] | undefined): number[] | undefined {
@@ -124,7 +124,7 @@ export async function loadTilesets(urls: string[]): Promise<{ tileset: Tileset; 
   const loaded: Tileset[] = [];
   const failures: { url: string; error: unknown }[] = [];
   results.forEach((r, i) => (r.status === 'fulfilled' ? loaded.push(r.value) : failures.push({ url: urls[i], error: r.reason })));
-  if (!loaded.length) throw failures[0]?.error ?? new BuildingWindowLayerError('source', 'no tileset could be loaded');
+  if (!loaded.length) throw failures[0]?.error ?? new BuildingFacadeLayerError('source', 'no tileset could be loaded');
 
   const b = loaded.map((t) => t.root.bounds);
   const root: TileNode = {

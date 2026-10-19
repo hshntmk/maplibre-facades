@@ -1,15 +1,15 @@
 // 公開 API。ここから export していないものは内部実装で、予告なく変わる。
 
 export {
-  BuildingWindowLayer,
+  BuildingFacadeLayer,
   CATEGORY_COLORS,
   FACADE_COLORS,
-  type BuildingWindowLayerOptions,
-  type BuildingWindowLayerEvents,
+  type BuildingFacadeLayerOptions,
+  type BuildingFacadeLayerEvents,
   type TileStatus,
   type DebugMode,
-} from './layer/BuildingWindowLayer';
-export { BuildingWindowLayerError, type BuildingWindowErrorCode } from './errors';
+} from './layer/BuildingFacadeLayer';
+export { BuildingFacadeLayerError, type BuildingFacadeLayerErrorCode } from './errors';
 export { setWorkerUrl, getWorkerUrl } from './worker/createWorker';
 
 // 時刻

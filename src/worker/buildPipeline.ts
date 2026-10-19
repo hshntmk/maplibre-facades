@@ -1,7 +1,7 @@
 import { createAdapter } from '../adapters/registry';
 import type { BuildingAdapter } from '../adapters/BuildingAdapter';
 import { enrich } from '../enrich/Enricher';
-import { BuildingWindowLayerError } from '../errors';
+import { BuildingFacadeLayerError } from '../errors';
 import type { BuildingRecord } from '../model/BuildingRecord';
 import { FacadeMeshBuilder, createReference } from '../mesh/FacadeMeshBuilder';
 import type { FacadeMesh } from '../mesh/layout';
@@ -38,7 +38,7 @@ export class RecordFactory {
       try {
         raw = this.adapter.toRecord(f.properties, f.geometry, { sourceId });
       } catch (e) {
-        throw new BuildingWindowLayerError('adapter', `Adapter "${this.adapter.name}" failed: ${e instanceof Error ? e.message : e}`, { cause: e });
+        throw new BuildingFacadeLayerError('adapter', `Adapter "${this.adapter.name}" failed: ${e instanceof Error ? e.message : e}`, { cause: e });
       }
       if (!raw || seen.has(raw.id)) {
         skipped++;

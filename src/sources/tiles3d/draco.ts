@@ -1,6 +1,6 @@
 import type { DecoderModule } from 'draco3d';
 import createDecoderModule from 'draco3d/draco_decoder_nodejs.js';
-import { BuildingWindowLayerError } from '../../errors';
+import { BuildingFacadeLayerError } from '../../errors';
 
 // Draco 圧縮された glTF プリミティブの展開。JS の部分は Worker に同梱し、wasm は URL から読む（初回のみ）。
 
@@ -11,7 +11,7 @@ export function getDracoModule(wasmUrl: string): Promise<DecoderModule> {
   if (!p) {
     p = (async () => {
       const fail = (e: unknown): never => {
-        throw new BuildingWindowLayerError('source', `Failed to load Draco decoder (${wasmUrl}): ${e instanceof Error ? e.message : e}`, { cause: e });
+        throw new BuildingFacadeLayerError('source', `Failed to load Draco decoder (${wasmUrl}): ${e instanceof Error ? e.message : e}`, { cause: e });
       };
       let wasmBinary: ArrayBuffer;
       try {
@@ -52,7 +52,7 @@ export function decodeDraco(m: DecoderModule, bytes: Uint8Array, attributeIds: R
   try {
     buffer.Init(new Int8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength), bytes.byteLength);
     const status = decoder.DecodeBufferToMesh(buffer, mesh);
-    if (!status.ok()) throw new BuildingWindowLayerError('source', `Draco decode failed: ${status.error_msg()}`);
+    if (!status.ok()) throw new BuildingFacadeLayerError('source', `Draco decode failed: ${status.error_msg()}`);
 
     const attributes: DecodedPrimitive['attributes'] = {};
     for (const [name, id] of Object.entries(attributeIds)) {

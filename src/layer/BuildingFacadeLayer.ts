@@ -1,6 +1,6 @@
 import type { CustomLayerInterface, CustomRenderMethodInput, Map as MapLibreMap } from 'maplibre-gl';
 import type { AdapterConfig } from '../adapters/BuildingAdapter';
-import { BuildingWindowLayerError } from '../errors';
+import { BuildingFacadeLayerError } from '../errors';
 import { computeLighting, type LightingState } from '../lighting/TimeOfDay';
 import { createMat4, invert, multiply, translateScale } from '../math/mat4';
 import {
@@ -46,7 +46,7 @@ import { validateLayerOptions } from './validateOptions';
 /** category: 用途 / style: ファサードスタイル / facade: 壁面の分類（界壁・側壁・正面・日当たり面）と配置された窓 */
 export type DebugMode = 'none' | 'category' | 'style' | 'facade';
 
-export interface BuildingWindowLayerOptions {
+export interface BuildingFacadeLayerOptions {
   /** MapLibre のレイヤー ID */
   id: string;
   source: SourceConfig;
@@ -84,14 +84,14 @@ export interface BuildingWindowLayerOptions {
   workerUrl?: string | URL;
 }
 
-export interface BuildingWindowLayerEvents extends Record<string, unknown> {
+export interface BuildingFacadeLayerEvents extends Record<string, unknown> {
   /** 最初の表示範囲の読み込みとメッシュ生成が終わった（GeoJSON は全体の読み込み） */
-  load: { target: BuildingWindowLayer; stats: BuildingStats };
+  load: { target: BuildingFacadeLayer; stats: BuildingStats };
   /** タイルを 1 つ読み込んだ（隣のタイルが届いて作り直した場合も含む）。timing は処理時間の内訳（待ち時間は queued） */
-  tileload: { target: BuildingWindowLayer; tileId: string; stats: BuildingStats; timing: TileTiming & { total: number } };
+  tileload: { target: BuildingFacadeLayer; tileId: string; stats: BuildingStats; timing: TileTiming & { total: number } };
   /** 表示範囲から外れたタイルをキャッシュから捨てた */
-  tileunload: { target: BuildingWindowLayer; tileId: string };
-  error: { target: BuildingWindowLayer; error: BuildingWindowLayerError };
+  tileunload: { target: BuildingFacadeLayer; tileId: string };
+  error: { target: BuildingFacadeLayer; error: BuildingFacadeLayerError };
 }
 
 /** タイルの読み込み状況 */
@@ -198,17 +198,17 @@ const GEOJSON_TILE = 'geojson';
  * 建物の窓を手続き的に描画する MapLibre GL JS のカスタムレイヤー。
  *
  * ```ts
- * const layer = new BuildingWindowLayer({ id: 'windows', source: { type: 'geojson', url: '/chiyoda.geojson' } });
+ * const layer = new BuildingFacadeLayer({ id: 'facades', source: { type: 'geojson', url: '/chiyoda.geojson' } });
  * layer.on('load', ({ stats }) => console.log(stats.total));
  * map.addLayer(layer);
  * ```
  */
-export class BuildingWindowLayer extends Evented<BuildingWindowLayerEvents> implements CustomLayerInterface {
+export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> implements CustomLayerInterface {
   readonly id: string;
   readonly type = 'custom' as const;
   readonly renderingMode = '3d' as const;
 
-  private readonly options: Readonly<BuildingWindowLayerOptions>;
+  private readonly options: Readonly<BuildingFacadeLayerOptions>;
   private readonly styles: Record<string, FacadeStyle>;
   private readonly styleRules: StyleRule[];
   private readonly _styleNames: readonly string[];
@@ -240,8 +240,8 @@ export class BuildingWindowLayer extends Evented<BuildingWindowLayerEvents> impl
   private readonly inverse = createMat4();
   private readonly debugColorBuffer = new Float32Array(16 * 3);
 
-  /** @throws {BuildingWindowLayerError} code = 'options'（設定が不正な場合） */
-  constructor(options: BuildingWindowLayerOptions) {
+  /** @throws {BuildingFacadeLayerError} code = 'options'（設定が不正な場合） */
+  constructor(options: BuildingFacadeLayerOptions) {
     super();
     const styles = options.styles ?? PRESET_STYLES;
     const styleRules = options.styleRules ?? DEFAULT_STYLE_RULES;
@@ -326,7 +326,7 @@ export class BuildingWindowLayer extends Evented<BuildingWindowLayerEvents> impl
   // ---------------------------------------------------------------- controls
 
   setTimeOfDay(hour: number): this {
-    if (!Number.isFinite(hour)) throw new BuildingWindowLayerError('options', `timeOfDay must be a finite number (got ${hour})`);
+    if (!Number.isFinite(hour)) throw new BuildingFacadeLayerError('options', `timeOfDay must be a finite number (got ${hour})`);
     this.lighting = computeLighting(hour);
     this.map?.triggerRepaint();
     return this;
@@ -334,7 +334,7 @@ export class BuildingWindowLayer extends Evented<BuildingWindowLayerEvents> impl
 
   /** 窓・室内・反射・屋上などの効果の ON/OFF。OFF では単色の箱として、時刻に関係ない固定の陰影で描く */
   setEffects(enabled: boolean): this {
-    if (typeof enabled !== 'boolean') throw new BuildingWindowLayerError('options', `effects must be a boolean (got ${enabled})`);
+    if (typeof enabled !== 'boolean') throw new BuildingFacadeLayerError('options', `effects must be a boolean (got ${enabled})`);
     this._effects = enabled;
     this.map?.triggerRepaint();
     return this;
@@ -342,7 +342,7 @@ export class BuildingWindowLayer extends Evented<BuildingWindowLayerEvents> impl
 
   /** インテリアマッピングの ON/OFF。OFF では窓の中を照明の色の平坦な面で描く */
   setInterior(enabled: boolean): this {
-    if (typeof enabled !== 'boolean') throw new BuildingWindowLayerError('options', `interior must be a boolean (got ${enabled})`);
+    if (typeof enabled !== 'boolean') throw new BuildingFacadeLayerError('options', `interior must be a boolean (got ${enabled})`);
     this.interior = enabled;
     this.map?.triggerRepaint();
     return this;
@@ -389,7 +389,7 @@ export class BuildingWindowLayer extends Evented<BuildingWindowLayerEvents> impl
   /** ガラスの反射の強さ（0–3）。各スタイルの reflectivity に掛ける倍率 */
   setReflection(strength: number): this {
     if (!Number.isFinite(strength) || strength < 0 || strength > 3) {
-      throw new BuildingWindowLayerError('options', `reflection must be a number between 0 and 3 (got ${strength})`);
+      throw new BuildingFacadeLayerError('options', `reflection must be a number between 0 and 3 (got ${strength})`);
     }
     this._reflection = strength;
     this.map?.triggerRepaint();
@@ -397,7 +397,7 @@ export class BuildingWindowLayer extends Evented<BuildingWindowLayerEvents> impl
   }
 
   setDebugMode(mode: DebugMode): this {
-    if (!(mode in DEBUG_INDEX)) throw new BuildingWindowLayerError('options', `unknown debug mode: ${mode}`);
+    if (!(mode in DEBUG_INDEX)) throw new BuildingFacadeLayerError('options', `unknown debug mode: ${mode}`);
     this.debug = mode;
     this.map?.triggerRepaint();
     return this;
@@ -427,14 +427,14 @@ export class BuildingWindowLayer extends Evented<BuildingWindowLayerEvents> impl
         materials: createMaterialGpu(gl),
       };
     } catch (e) {
-      this.emitError(new BuildingWindowLayerError('webgl', e instanceof Error ? e.message : String(e), { cause: e }));
+      this.emitError(new BuildingFacadeLayerError('webgl', e instanceof Error ? e.message : String(e), { cause: e }));
       return;
     }
     if (!this.startWorker()) return;
 
     const source = this.options.source;
     const resolve = (u: string) => new URL(u, document.baseURI).href;
-    const toError = (e: unknown) => (e instanceof BuildingWindowLayerError ? e : new BuildingWindowLayerError('source', String(e), { cause: e }));
+    const toError = (e: unknown) => (e instanceof BuildingFacadeLayerError ? e : new BuildingFacadeLayerError('source', String(e), { cause: e }));
     if (source.type === 'geojson') {
       const requestId = ++this.requestId;
       this.tiles.set(GEOJSON_TILE, { id: GEOJSON_TILE, state: 'loading', requestId, requestedAt: performance.now(), lastUsed: 0 });
@@ -676,7 +676,7 @@ export class BuildingWindowLayer extends Evented<BuildingWindowLayerEvents> impl
       node
         .pending()
         .catch((e) => {
-          if (generation === this.generation) this.emitError(e instanceof BuildingWindowLayerError ? e : new BuildingWindowLayerError('source', String(e), { cause: e }));
+          if (generation === this.generation) this.emitError(e instanceof BuildingFacadeLayerError ? e : new BuildingFacadeLayerError('source', String(e), { cause: e }));
         })
         .finally(() => {
           this.expanding.delete(node);
@@ -733,7 +733,7 @@ export class BuildingWindowLayer extends Evented<BuildingWindowLayerEvents> impl
     try {
       worker = createBuildingWorker(this.options.workerUrl);
     } catch (e) {
-      this.emitError(new BuildingWindowLayerError('worker', `Failed to start worker: ${e instanceof Error ? e.message : e}`, { cause: e }));
+      this.emitError(new BuildingFacadeLayerError('worker', `Failed to start worker: ${e instanceof Error ? e.message : e}`, { cause: e }));
       return false;
     }
     this.worker = worker;
@@ -743,7 +743,7 @@ export class BuildingWindowLayer extends Evented<BuildingWindowLayerEvents> impl
       ev.preventDefault();
       if (generation !== this.generation) return;
       this.stopWorker();
-      this.emitError(new BuildingWindowLayerError('worker', `Worker error: ${ev.message || 'failed to load worker script'}`));
+      this.emitError(new BuildingFacadeLayerError('worker', `Worker error: ${ev.message || 'failed to load worker script'}`));
     };
     const source = this.options.source;
     const init: InitRequest = {
@@ -796,7 +796,7 @@ export class BuildingWindowLayer extends Evented<BuildingWindowLayerEvents> impl
     if (msg.type === 'initError') {
       // 設定が不正なので、どのタイルも変換できない。Worker を止めて 1 回だけ知らせる
       this.stopWorker();
-      this.emitError(new BuildingWindowLayerError(msg.code, msg.message));
+      this.emitError(new BuildingFacadeLayerError(msg.code, msg.message));
       return;
     }
     const entry = msg.tileId !== undefined ? this.tiles.get(msg.tileId) : undefined;
@@ -811,7 +811,7 @@ export class BuildingWindowLayer extends Evented<BuildingWindowLayerEvents> impl
     if (msg.type === 'error') {
       entry.state = 'failed';
       const where = entry.node ? ` (tile ${entry.node.contentUrl})` : '';
-      this.emitError(new BuildingWindowLayerError(msg.code, `${msg.message}${where}`));
+      this.emitError(new BuildingFacadeLayerError(msg.code, `${msg.message}${where}`));
       this.map?.triggerRepaint();
       return;
     }
@@ -844,7 +844,7 @@ export class BuildingWindowLayer extends Evented<BuildingWindowLayerEvents> impl
     this.map?.triggerRepaint();
   }
 
-  private emitError(error: BuildingWindowLayerError): void {
+  private emitError(error: BuildingFacadeLayerError): void {
     if (this.listens('error')) this.fire('error', { target: this, error });
     else console.error(error);
   }

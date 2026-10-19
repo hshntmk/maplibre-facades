@@ -1,4 +1,4 @@
-import { BuildingWindowLayerError } from '../../errors';
+import { BuildingFacadeLayerError } from '../../errors';
 import { ecefToGeodetic } from './footprints';
 import type { TileBounds } from './Tileset';
 
@@ -37,6 +37,6 @@ export function toBounds(bv: BoundingVolumeJson, transform: ArrayLike<number> | 
     const [cx, cy, cz] = apply(transform, bv.sphere[0], bv.sphere[1], bv.sphere[2]);
     return boundsFromSphere(cx, cy, cz, bv.sphere[3]);
   }
-  throw new BuildingWindowLayerError('source', 'tileset: unsupported bounding volume');
+  throw new BuildingFacadeLayerError('source', 'tileset: unsupported bounding volume');
 }
 

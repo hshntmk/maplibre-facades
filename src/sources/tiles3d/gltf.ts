@@ -1,5 +1,5 @@
 import type { DecoderModule } from 'draco3d';
-import { BuildingWindowLayerError } from '../../errors';
+import { BuildingFacadeLayerError } from '../../errors';
 import { decodeDraco, type DecodedPrimitive } from './draco';
 
 // タイルの中身の glTF (GLB) を読む。3D Tiles 1.0 の b3dm に埋め込まれたものと、1.1 の glb タイルで共通。
@@ -40,7 +40,7 @@ export interface Gltf {
 }
 
 export const fail = (message: string): never => {
-  throw new BuildingWindowLayerError('source', message);
+  throw new BuildingFacadeLayerError('source', message);
 };
 
 const decoder = new TextDecoder();

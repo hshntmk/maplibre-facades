@@ -1,5 +1,5 @@
 import type { AdapterConfig } from '../adapters/BuildingAdapter';
-import type { BuildingWindowErrorCode } from '../errors';
+import type { BuildingFacadeLayerErrorCode } from '../errors';
 import type { ExposureThresholds } from '../mesh/FacadeAnalyzer';
 import type { MaterialTexture } from '../material/WallMaterials';
 import type { FacadeLengths, FacadeMesh } from '../mesh/layout';
@@ -98,14 +98,14 @@ export interface ErrorResponse {
   type: 'error';
   requestId: number;
   tileId?: string;
-  code: BuildingWindowErrorCode;
+  code: BuildingFacadeLayerErrorCode;
   message: string;
 }
 
 /** 変換の設定（アダプタ・スタイル選択ルール）が不正。Worker は以降の build / tile を処理しない */
 export interface InitErrorResponse {
   type: 'initError';
-  code: BuildingWindowErrorCode;
+  code: BuildingFacadeLayerErrorCode;
   message: string;
 }
 

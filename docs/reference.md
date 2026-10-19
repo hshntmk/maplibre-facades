@@ -8,9 +8,9 @@
   - 1.1 動作環境
   - 1.2 公開 API
   - 1.3 処理の流れ
-- 2\. `BuildingWindowLayer`
+- 2\. `BuildingFacadeLayer`
   - 2.1 コンストラクタ
-  - 2.2 `BuildingWindowLayerOptions`
+  - 2.2 `BuildingFacadeLayerOptions`
   - 2.3 プロパティ
   - 2.4 メソッド
   - 2.5 イベント
@@ -46,7 +46,7 @@
   - 10.2 `TileTiming`
   - 10.3 `TileStatus`
 - 11\. エラー
-  - 11.1 `BuildingWindowLayerError`
+  - 11.1 `BuildingFacadeLayerError`
   - 11.2 エラーコード
 - 12\. Worker
   - 12.1 `setWorkerUrl()`
@@ -90,10 +90,10 @@
 
 ---
 
-## 2. `BuildingWindowLayer`
+## 2. `BuildingFacadeLayer`
 
 ```ts
-class BuildingWindowLayer implements CustomLayerInterface
+class BuildingFacadeLayer implements CustomLayerInterface
 ```
 
 MapLibre の `CustomLayerInterface` を実装するクラス。`type` は `'custom'`、`renderingMode` は `'3d'` である。
@@ -101,10 +101,10 @@ MapLibre の `CustomLayerInterface` を実装するクラス。`type` は `'cust
 ### 2.1 コンストラクタ
 
 ```ts
-new BuildingWindowLayer(options: BuildingWindowLayerOptions)
+new BuildingFacadeLayer(options: BuildingFacadeLayerOptions)
 ```
 
-コンストラクタは `options` を同期的に検証する。値が不正な場合、`BuildingWindowLayerError`（`code: 'options'`）を送出する。
+コンストラクタは `options` を同期的に検証する。値が不正な場合、`BuildingFacadeLayerError`（`code: 'options'`）を送出する。
 
 コンストラクタが検証する項目:
 
@@ -122,7 +122,7 @@ new BuildingWindowLayer(options: BuildingWindowLayerOptions)
 
 `adapter` と `styleRules[].when` の式の内容は、コンストラクタでは検証されない。これらは Worker で評価される。
 
-### 2.2 `BuildingWindowLayerOptions`
+### 2.2 `BuildingFacadeLayerOptions`
 
 | 名前 | 型 | 既定値 | 説明 |
 |---|---|---|---|
@@ -164,7 +164,7 @@ new BuildingWindowLayer(options: BuildingWindowLayerOptions)
 
 ### 2.4 メソッド
 
-`set` で始まるメソッドは `this` を返す。各メソッドは値を更新したあと、`map.triggerRepaint()` を呼ぶ。検証に失敗したメソッドは `BuildingWindowLayerError`（`code: 'options'`）を送出し、現在の設定を変更しない。
+`set` で始まるメソッドは `this` を返す。各メソッドは値を更新したあと、`map.triggerRepaint()` を呼ぶ。検証に失敗したメソッドは `BuildingFacadeLayerError`（`code: 'options'`）を送出し、現在の設定を変更しない。
 
 #### `setTimeOfDay(hour: number): this`
 
@@ -244,14 +244,14 @@ layer.setWeathering(false);
 
 ### 2.5 イベント
 
-型は `BuildingWindowLayerEvents` である。すべてのイベントオブジェクトは `target: BuildingWindowLayer` を持つ。
+型は `BuildingFacadeLayerEvents` である。すべてのイベントオブジェクトは `target: BuildingFacadeLayer` を持つ。
 
 | 名前 | 発行の条件 | イベントオブジェクト |
 |---|---|---|
 | `load` | 3D Tiles: 読み込むべきタイルとサブツリーがなくなり、描画中のタイルが 1 つ以上ある。GeoJSON: データ全体のメッシュが届いた。 | `{ target, stats: BuildingStats }` |
 | `tileload` | タイル 1 つのメッシュが届いた。隣接タイルの到着による再生成を含む。GeoJSON ではデータ全体を 1 タイルとし、`tileId` は `'geojson'` である。 | `{ target, tileId: string, stats: BuildingStats, timing: TileTiming & { total: number } }` |
 | `tileunload` | キャッシュから外れたタイルを破棄した。 | `{ target, tileId: string }` |
-| `error` | 取得・変換・描画のいずれかが失敗した。 | `{ target, error: BuildingWindowLayerError }` |
+| `error` | 取得・変換・描画のいずれかが失敗した。 | `{ target, error: BuildingFacadeLayerError }` |
 
 `timing.total` は、タイルの要求からメッシュの受信までの経過時間（ミリ秒）である。待ち時間を含む。
 
@@ -489,8 +489,8 @@ interface DeclarativeAdapterSpec {
 - `provenance.categoryEstimated` は、`category` が `'unknown'` の場合に `true` になる。
 
 ```ts
-new BuildingWindowLayer({
-  id: 'windows',
+new BuildingFacadeLayer({
+  id: 'facades',
   source: { type: 'geojson', url: '/osm-buildings.geojson' },
   adapter: {
     name: 'declarative',
@@ -570,7 +570,7 @@ Worker はアダプタの出力に次の処理を順に適用する。
 
 1 種類の建物の外観を定義する。比率は、窓 1 枚分の区画（`windowSpacing` × 階高）に対する値である。
 
-範囲外の値はコンストラクタで `BuildingWindowLayerError`（`code: 'options'`）になる。「任意」と記した項目以外は必須である。
+範囲外の値はコンストラクタで `BuildingFacadeLayerError`（`code: 'options'`）になる。「任意」と記した項目以外は必須である。
 
 ```ts
 type RGB = [number, number, number];             // 各成分 0–1
@@ -767,7 +767,7 @@ styleRules: [
 - オブジェクト: 含まれる項目を上書きする。`enabled` を省略した場合、`enabled` は `true` になる。
 - `undefined`: 変更しない。
 
-統合後の値が範囲外の場合、`BuildingWindowLayerError`（`code: 'options'`）が送出される。
+統合後の値が範囲外の場合、`BuildingFacadeLayerError`（`code: 'options'`）が送出される。
 
 ### 8.1 `RoofOptions`
 
@@ -963,12 +963,12 @@ map.setPaintProperty('background', 'background-color',
 
 ## 11. エラー
 
-### 11.1 `BuildingWindowLayerError`
+### 11.1 `BuildingFacadeLayerError`
 
 ```ts
-class BuildingWindowLayerError extends Error {
-  readonly name: 'BuildingWindowLayerError';
-  readonly code: BuildingWindowErrorCode;
+class BuildingFacadeLayerError extends Error {
+  readonly name: 'BuildingFacadeLayerError';
+  readonly code: BuildingFacadeLayerErrorCode;
   readonly cause?: unknown;
 }
 ```
@@ -978,7 +978,7 @@ class BuildingWindowLayerError extends Error {
 ### 11.2 エラーコード
 
 ```ts
-type BuildingWindowErrorCode = 'options' | 'source' | 'adapter' | 'style' | 'worker' | 'webgl';
+type BuildingFacadeLayerErrorCode = 'options' | 'source' | 'adapter' | 'style' | 'worker' | 'webgl';
 ```
 
 | `code` | 原因 | 通知方法 |
@@ -1005,7 +1005,7 @@ Worker が停止した場合（上記の初期化時のエラー、または `wo
 try {
   layer.setReflection(5);
 } catch (e) {
-  if (e instanceof BuildingWindowLayerError && e.code === 'options') console.warn(e.message);
+  if (e instanceof BuildingFacadeLayerError && e.code === 'options') console.warn(e.message);
 }
 ```
 
@@ -1017,7 +1017,7 @@ try {
 
 Worker のスクリプトは次の順で決まる。
 
-1. `BuildingWindowLayerOptions.workerUrl`
+1. `BuildingFacadeLayerOptions.workerUrl`
 2. `setWorkerUrl()` で設定した URL
 3. バンドルに埋め込まれたスクリプト（Blob URL）
 

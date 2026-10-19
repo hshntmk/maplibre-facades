@@ -4,7 +4,7 @@ import InlineBuildingWorker from './buildingWorker?worker&inline';
 
 let globalWorkerUrl: string | URL | undefined;
 
-/** すべての BuildingWindowLayer が使うワーカーの URL を設定する（`maplibre-facades/worker` を配置した場所） */
+/** すべての BuildingFacadeLayer が使うワーカーの URL を設定する（`maplibre-facades/worker` を配置した場所） */
 export function setWorkerUrl(url: string | URL | undefined): void {
   globalWorkerUrl = url;
 }

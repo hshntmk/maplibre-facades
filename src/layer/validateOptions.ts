@@ -1,4 +1,4 @@
-import { BuildingWindowLayerError } from '../errors';
+import { BuildingFacadeLayerError } from '../errors';
 import { WALL_MATERIALS } from '../material/WallMaterials';
 import { MAX_CLEARANCE } from '../mesh/FacadeAnalyzer';
 import { GLASS_PALETTE_SIZE, WALL_PALETTE_SIZE, paletteEntry, type FacadeStyle, type PaletteColor } from '../style/FacadeStyle';
@@ -6,11 +6,11 @@ import type { StyleRule } from '../style/StyleResolver';
 
 export const MAX_STYLES = 16;
 
-/** DebugMode の値（BuildingWindowLayer の DEBUG_INDEX と合わせること） */
+/** DebugMode の値（BuildingFacadeLayer の DEBUG_INDEX と合わせること） */
 const DEBUG_MODES = ['none', 'category', 'style', 'facade'] as const;
 
 const fail = (message: string): never => {
-  throw new BuildingWindowLayerError('options', message);
+  throw new BuildingFacadeLayerError('options', message);
 };
 
 const isFiniteNumber = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);

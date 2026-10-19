@@ -1,4 +1,4 @@
-import { BuildingWindowLayerError } from '../../errors';
+import { BuildingFacadeLayerError } from '../../errors';
 import { toBounds, type BoundingVolumeJson } from './bounds';
 import type { TileNode } from './Tileset';
 
@@ -49,7 +49,7 @@ export interface Subtree {
 }
 
 const fail = (message: string, cause?: unknown): never => {
-  throw new BuildingWindowLayerError('source', message, { cause });
+  throw new BuildingFacadeLayerError('source', message, { cause });
 };
 
 async function fetchBytes(url: string): Promise<Uint8Array> {

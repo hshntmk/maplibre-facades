@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { BuildingWindowLayerError } from '../src/errors';
-import { BuildingWindowLayer } from '../src/layer/BuildingWindowLayer';
+import { BuildingFacadeLayerError } from '../src/errors';
+import { BuildingFacadeLayer } from '../src/layer/BuildingFacadeLayer';
 import type { Point } from '../src/mesh/FacadeAnalyzer';
 import { AVIATION_LIGHT_MIN_GENERATED_HEIGHT, createRng, generateRooftop, type RooftopInput } from '../src/mesh/RooftopGenerator';
 import { DEFAULT_ROOF_OPTIONS, resolveRoofOptions } from '../src/roof/RoofOptions';
@@ -64,17 +64,17 @@ describe('resolveRoofOptions', () => {
         resolveRoofOptions(roof);
         throw new Error('expected an error');
       } catch (e) {
-        expect(e).toBeInstanceOf(BuildingWindowLayerError);
-        expect((e as BuildingWindowLayerError).code).toBe('options');
+        expect(e).toBeInstanceOf(BuildingFacadeLayerError);
+        expect((e as BuildingFacadeLayerError).code).toBe('options');
       }
     }
   });
 });
 
-describe('BuildingWindowLayer: roof', () => {
+describe('BuildingFacadeLayer: roof', () => {
   const source = { type: 'geojson' as const, url: '/data.geojson' };
   it('exposes the resolved roof options and updates them with setRoof()', () => {
-    const layer = new BuildingWindowLayer({ id: 'w', source, roof: { equipment: false } });
+    const layer = new BuildingFacadeLayer({ id: 'w', source, roof: { equipment: false } });
     expect(layer.roof.equipment.enabled).toBe(false);
     layer.setRoof({ equipment: { density: 0.4 }, aviationLights: false });
     expect(layer.roof.equipment).toEqual({ enabled: true, density: 0.4 });

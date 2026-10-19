@@ -1,4 +1,4 @@
-import { BuildingWindowLayerError } from '../errors';
+import { BuildingFacadeLayerError } from '../errors';
 import type { AdapterConfig, AdapterFactory, BuildingAdapter } from './BuildingAdapter';
 import { createDeclarativeAdapter } from './DeclarativeAdapter';
 import { createPlateauAdapter } from './plateau/PlateauAdapter';
@@ -17,6 +17,6 @@ export function registerAdapter(name: string, factory: AdapterFactory): void {
 export function createAdapter(config: AdapterConfig): BuildingAdapter {
   if ('spec' in config && config.name === 'declarative') return createDeclarativeAdapter(config.spec);
   const factory = factories[config.name];
-  if (!factory) throw new BuildingWindowLayerError('adapter', `Unknown building adapter: ${config.name}`);
+  if (!factory) throw new BuildingFacadeLayerError('adapter', `Unknown building adapter: ${config.name}`);
   return factory('options' in config ? config.options : undefined);
 }

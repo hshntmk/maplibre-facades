@@ -6,13 +6,13 @@
  * - `worker`: Worker の起動・通信に失敗
  * - `webgl`: シェーダのコンパイルなど WebGL のエラー
  */
-export type BuildingWindowErrorCode = 'options' | 'source' | 'adapter' | 'style' | 'worker' | 'webgl';
+export type BuildingFacadeLayerErrorCode = 'options' | 'source' | 'adapter' | 'style' | 'worker' | 'webgl';
 
-export class BuildingWindowLayerError extends Error {
-  override readonly name = 'BuildingWindowLayerError';
+export class BuildingFacadeLayerError extends Error {
+  override readonly name = 'BuildingFacadeLayerError';
 
   constructor(
-    readonly code: BuildingWindowErrorCode,
+    readonly code: BuildingFacadeLayerErrorCode,
     message: string,
     options?: { cause?: unknown },
   ) {

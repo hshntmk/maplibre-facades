@@ -1,4 +1,4 @@
-import { BuildingWindowLayerError } from '../errors';
+import { BuildingFacadeLayerError } from '../errors';
 
 // 表面の細部（外壁の素材の凹凸とつや、ガラスの歪み）のレイヤー全体の設定。描画時のパラメータなので、変更してもデータの再読み込みは起きない。
 // どの建物にどの素材を使うかはスタイルの wallMaterials で決まる。
@@ -20,7 +20,7 @@ export const DEFAULT_SURFACE_DETAIL_OPTIONS: Readonly<ResolvedSurfaceDetailOptio
 });
 
 const fail = (message: string): never => {
-  throw new BuildingWindowLayerError('options', message);
+  throw new BuildingFacadeLayerError('options', message);
 };
 const checkRange = (path: string, v: unknown, min: number, max: number) => {
   if (typeof v !== 'number' || !Number.isFinite(v) || v < min || v > max) fail(`${path} must be a number between ${min} and ${max} (got ${JSON.stringify(v)})`);

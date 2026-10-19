@@ -1,5 +1,5 @@
 /// <reference lib="webworker" />
-import { BuildingWindowLayerError } from '../errors';
+import { BuildingFacadeLayerError } from '../errors';
 import { WALL_MATERIALS, createMaterialTexture } from '../material/WallMaterials';
 import type { FacadeMesh } from '../mesh/layout';
 import { readGeoJsonSource } from '../sources/GeoJsonSource';
@@ -26,7 +26,7 @@ async function fetchBytes(url: string): Promise<Uint8Array> {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return new Uint8Array(await res.arrayBuffer());
   } catch (e) {
-    throw new BuildingWindowLayerError('source', `Failed to load ${url}: ${e instanceof Error ? e.message : e}`, { cause: e });
+    throw new BuildingFacadeLayerError('source', `Failed to load ${url}: ${e instanceof Error ? e.message : e}`, { cause: e });
   }
 }
 
@@ -46,7 +46,7 @@ self.onmessage = async (ev: MessageEvent<WorkerRequest>) => {
       initFailed = true;
       post({
         type: 'initError',
-        code: e instanceof BuildingWindowLayerError ? e.code : 'worker',
+        code: e instanceof BuildingFacadeLayerError ? e.code : 'worker',
         message: e instanceof Error ? e.message : String(e),
       });
     }
@@ -62,7 +62,7 @@ self.onmessage = async (ev: MessageEvent<WorkerRequest>) => {
   }
   if (initFailed) return;
   try {
-    if (!config || !factory) throw new BuildingWindowLayerError('worker', 'worker is not initialized');
+    if (!config || !factory) throw new BuildingFacadeLayerError('worker', 'worker is not initialized');
 
     if (req.type === 'build') {
       const t0 = performance.now();
@@ -103,7 +103,7 @@ self.onmessage = async (ev: MessageEvent<WorkerRequest>) => {
       type: 'error',
       requestId: req.requestId,
       tileId: req.tileId,
-      code: e instanceof BuildingWindowLayerError ? e.code : 'worker',
+      code: e instanceof BuildingFacadeLayerError ? e.code : 'worker',
       message: e instanceof Error ? e.message : String(e),
     });
   }

@@ -1,5 +1,5 @@
 import { featureFilter, type ExpressionFilterSpecification } from '@maplibre/maplibre-gl-style-spec';
-import { BuildingWindowLayerError } from '../errors';
+import { BuildingFacadeLayerError } from '../errors';
 import { recordToExpressionProperties, type BuildingRecord } from '../model/BuildingRecord';
 
 /** MapLibre の式で書くスタイル選択ルール。式は共通モデルの属性（category, storeys…）を参照する */
@@ -14,13 +14,13 @@ export class StyleResolver {
   constructor(rules: StyleRule[], styleNames: string[]) {
     this.compiled = rules.map((rule, i) => {
       const styleIndex = styleNames.indexOf(rule.style);
-      if (styleIndex < 0) throw new BuildingWindowLayerError('style', `styleRules[${i}]: unknown style "${rule.style}"`);
+      if (styleIndex < 0) throw new BuildingFacadeLayerError('style', `styleRules[${i}]: unknown style "${rule.style}"`);
       if (rule.when === true) return { test: () => true, styleIndex };
       let filter: ReturnType<typeof featureFilter>['filter'];
       try {
         ({ filter } = featureFilter(rule.when, `styleRules[${i}].when`));
       } catch (e) {
-        throw new BuildingWindowLayerError('style', `styleRules[${i}].when: ${e instanceof Error ? e.message : e}`, { cause: e });
+        throw new BuildingFacadeLayerError('style', `styleRules[${i}].when: ${e instanceof Error ? e.message : e}`, { cause: e });
       }
       return {
         test: (properties: Record<string, unknown>) => filter({ zoom: 0 }, { type: 3, properties }),
