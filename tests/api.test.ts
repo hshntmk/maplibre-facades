@@ -219,7 +219,9 @@ describe('BuildingFacadeLayer: worker init errors', () => {
     const layer = new BuildingFacadeLayer({ id: 'w', source });
     const listener = vi.fn();
     layer.on('error', listener);
-    (layer as unknown as { onWorkerMessage(msg: unknown): void }).onWorkerMessage({ type: 'initError', code: 'style', message: 'styleRules[0].when: bad' });
+    const onMessage = (layer as unknown as { onWorkerMessage(worker: number, msg: unknown): void }).onWorkerMessage.bind(layer);
+    onMessage(0, { type: 'initError', code: 'style', message: 'styleRules[0].when: bad' });
+    onMessage(1, { type: 'initError', code: 'style', message: 'styleRules[0].when: bad' }); // 他の Worker も同じエラーを返す
     expect(listener).toHaveBeenCalledOnce();
     const { error } = listener.mock.calls[0][0];
     expect(error).toBeInstanceOf(BuildingFacadeLayerError);
@@ -248,7 +250,7 @@ describe('BuildingFacadeLayer: worker init errors', () => {
       },
     );
     try {
-      const layer = new BuildingFacadeLayer({ id: 'w', source: { type: '3dtiles', url: '/tileset.json' }, workerUrl: '/worker.js' });
+      const layer = new BuildingFacadeLayer({ id: 'w', source: { type: '3dtiles', url: '/tileset.json' }, workerUrl: '/worker.js', workers: 1 });
       layer.on('error', () => {});
       (layer as unknown as { startWorker(): boolean }).startWorker();
       run({ layer, posted, workers });
@@ -258,7 +260,7 @@ describe('BuildingFacadeLayer: worker init errors', () => {
   };
   const node = (id: string) => ({ id, contentUrl: `https://example.com/${id}.glb`, geometricError: 0, refine: 'REPLACE', depth: 0, children: [], bounds: {} });
   const internal = (layer: BuildingFacadeLayer) =>
-    layer as unknown as { requestTile(n: unknown): void; onWorkerMessage(msg: unknown): void; inFlight: number };
+    layer as unknown as { requestTile(n: unknown, remesh?: boolean): void; onWorkerMessage(worker: number, msg: unknown): void; inFlight: number; unloadTile(e: unknown): void; tiles: Map<string, { stale?: boolean }> };
 
   it('drops pending tiles and stops requesting new ones after an init error', () => {
     withFakeWorker(({ layer, posted, workers }) => {
@@ -266,7 +268,7 @@ describe('BuildingFacadeLayer: worker init errors', () => {
       internal(layer).requestTile(node('b'));
       expect(layer.tileStatus.loading).toBe(2);
 
-      internal(layer).onWorkerMessage({ type: 'initError', code: 'adapter', message: 'Unknown building adapter: osm' });
+      internal(layer).onWorkerMessage(0, { type: 'initError', code: 'adapter', message: 'Unknown building adapter: osm' });
       expect(workers[0].terminated).toBe(true);
       expect(layer.tileStatus.loading).toBe(0);
       expect(internal(layer).inFlight).toBe(0);

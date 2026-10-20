@@ -1,12 +1,24 @@
+import type { BuildingRecord } from '../model/BuildingRecord';
 import { boundsOf, type Bounds, type StyledRecord } from './buildPipeline';
+import { NEIGHBOR_MARGIN_DEG, boundsOverlap } from './protocol';
 
-/** 壁面の解析で隣のタイルの建物を見る範囲（度）。光線の最大距離 40m より少し広く */
-export const NEIGHBOR_MARGIN_DEG = 0.0005;
+export { NEIGHBOR_MARGIN_DEG };
 
 interface TileEntry {
   records: StyledRecord[];
   skipped: number;
   bounds: Bounds;
+  /** 自分で展開したタイル（false は他の Worker から届いた、壁面の解析用の建物だけ） */
+  own: boolean;
+}
+
+/**
+ * 壁面の解析（隣の建物として使う）に要る値だけを残した建物。他の Worker に送る量を減らす。
+ * 隣の建物として使うのは ID・フットプリント・高さ・スタイル（しきい値）だけ
+ */
+export function toObstacle({ record, style }: StyledRecord): StyledRecord {
+  const { id, geometry, height, minHeight } = record;
+  return { record: { id, geometry, height, minHeight } as BuildingRecord, style };
 }
 
 const boundsCache = new WeakMap<StyledRecord, Bounds>();
@@ -16,17 +28,27 @@ const recordBounds = (r: StyledRecord): Bounds => {
   return b;
 };
 
-const overlaps = (a: Bounds, b: Bounds, margin: number) =>
-  Number.isFinite(a[0]) && Number.isFinite(b[0]) && a[0] - margin <= b[2] && a[2] + margin >= b[0] && a[1] - margin <= b[3] && a[3] + margin >= b[1];
+const overlaps = boundsOverlap;
 
 /** Worker が保持する、読み込み済みタイルの建物。隣接タイルの建物を壁面の解析に使う */
 export class TileStore {
   private readonly tiles = new Map<string, TileEntry>();
 
   set(tileId: string, records: StyledRecord[], skipped: number): TileEntry {
-    const entry = { records, skipped, bounds: boundsOf(records) };
+    const entry = { records, skipped, bounds: boundsOf(records), own: true };
     this.tiles.set(tileId, entry);
     return entry;
+  }
+
+  /** 他の Worker が展開したタイルの建物（toObstacle 済み）。自分で展開したタイルは上書きしない */
+  setObstacles(tileId: string, records: StyledRecord[]): void {
+    if (this.tiles.get(tileId)?.own) return;
+    this.tiles.set(tileId, { records, skipped: 0, bounds: boundsOf(records), own: false });
+  }
+
+  /** 持っているタイル（自分で展開したものと、他の Worker から届いたもの） */
+  ids(): string[] {
+    return [...this.tiles.keys()];
   }
 
   get(tileId: string): TileEntry | undefined {
@@ -55,12 +77,5 @@ export class TileStore {
       }
     }
     return [...out.values()];
-  }
-
-  /** tileId の建物が届いたことで、壁面の判定が変わりうる他のタイル */
-  affectedBy(tileId: string): string[] {
-    const entry = this.tiles.get(tileId);
-    if (!entry) return [];
-    return [...this.tiles.entries()].filter(([id, o]) => id !== tileId && overlaps(entry.bounds, o.bounds, NEIGHBOR_MARGIN_DEG)).map(([id]) => id);
   }
 }

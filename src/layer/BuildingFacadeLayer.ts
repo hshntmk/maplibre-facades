@@ -41,7 +41,8 @@ import type { StyleRule } from '../style/StyleResolver';
 import { computeFog, NO_FOG, type FogUniforms } from '../terrain/Fog';
 import { createTileGround, deleteTileGround, sampleTileGround, terrainElevation, type TileGround } from '../terrain/Ground';
 import { createBuildingWorker } from '../worker/createWorker';
-import type { BuildingStats, InitRequest, TileTiming, WorkerRequest, WorkerResponse } from '../worker/protocol';
+import { markStaleNeighbors } from './staleNeighbors';
+import { type BuildingStats, type InitRequest, type TileTiming, type WorkerRequest, type WorkerResponse } from '../worker/protocol';
 import { Evented } from './Evented';
 import { validateLayerOptions } from './validateOptions';
 
@@ -95,6 +96,11 @@ export interface BuildingFacadeLayerOptions {
   debug?: DebugMode;
   /** ワーカーの URL。省略時はバンドル内に埋め込んだワーカーを使う（setWorkerUrl() で全体の既定も変えられる） */
   workerUrl?: string | URL;
+  /**
+   * 3D Tiles の展開とメッシュ生成に使う Worker の数（1–16）。既定は CPU のコア数の半分（1〜4）。
+   * GeoJSON は一括で 1 つのメッシュにするので、常に 1
+   */
+  workers?: number;
 }
 
 export interface BuildingFacadeLayerEvents extends Record<string, unknown> {
@@ -201,12 +207,25 @@ interface TileEntry {
   /** 作り直しを依頼中 */
   remeshing?: boolean;
   lastUsed: number;
+  /** 展開した Worker の番号。建物のデータはこの Worker にあるので、作り直しもここに頼む */
+  owner?: number;
+  /** 建物の範囲 [west, south, east, north] */
+  bounds?: readonly number[];
+  /** メッシュを作ったときに Worker が持っていたタイル（隣のタイルが足りているかの判定に使う） */
+  known?: Set<string>;
 }
 
-/** 同時に読み込むタイルの最大数 */
-const MAX_IN_FLIGHT = 3;
-/** 同時に依頼する作り直しの最大数 */
-const MAX_REMESH_IN_FLIGHT = 1;
+/** 同時に読み込むタイルの最大数（Worker 1 つあたり。最低 3） */
+const IN_FLIGHT_PER_WORKER = 2;
+const MIN_IN_FLIGHT = 3;
+/** Worker の数の既定の上限 */
+const MAX_DEFAULT_WORKERS = 4;
+
+/** 既定の Worker の数: CPU のコア数の半分（MapLibre 自身の Worker や描画の分を残す）を 1〜4 に収める */
+export function defaultWorkerCount(): number {
+  const cores = typeof navigator !== 'undefined' && navigator.hardwareConcurrency ? navigator.hardwareConcurrency : 4;
+  return Math.max(1, Math.min(MAX_DEFAULT_WORKERS, Math.floor(cores / 2)));
+}
 /** 同時に読むサブツリー（暗黙的タイリング）の数。小さなファイルなので多めにする */
 const MAX_SUBTREES_IN_FLIGHT = 4;
 const GEOJSON_TILE = 'geojson';
@@ -252,7 +271,12 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
   private map?: MapLibreMap;
   private gl?: WebGL2RenderingContext;
   private programs?: Programs;
-  private worker?: Worker;
+  /** Worker のプール（止まったら空） */
+  private workers: Worker[] = [];
+  /** Worker ごとの処理中のリクエストの数（新しいタイルは一番空いている Worker に頼む） */
+  private workerLoad: number[] = [];
+  /** 初期化エラーを知らせたか（どの Worker も同じエラーを返すので 1 回だけ知らせる） */
+  private initErrorReported = false;
   private requestId = 0;
   private generation = 0;
   private readonly tiles = new Map<string, TileEntry>();
@@ -497,7 +521,7 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
     if (source.type === 'geojson') {
       const requestId = ++this.requestId;
       this.tiles.set(GEOJSON_TILE, { id: GEOJSON_TILE, state: 'loading', requestId, requestedAt: performance.now(), lastUsed: 0 });
-      this.post({ type: 'build', requestId, tileId: GEOJSON_TILE, source: { ...source, url: resolve(source.url) } });
+      this.post(0, { type: 'build', requestId, tileId: GEOJSON_TILE, source: { ...source, url: resolve(source.url) } });
     } else {
       const urls = (Array.isArray(source.url) ? source.url : [source.url]).map(resolve);
       loadTilesets(urls).then(
@@ -518,8 +542,9 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
     for (const [type, fn] of this.mapListeners) map.off(type as 'terrain', fn);
     this.mapListeners.length = 0;
     clearTimeout(this.terrainTimer);
-    this.worker?.terminate();
-    this.worker = undefined;
+    for (const w of this.workers) w.terminate();
+    this.workers = [];
+    this.workerLoad = [];
     for (const e of this.tiles.values()) if (e.gpu) deleteTileGpu(gl, e.gpu);
     this.tiles.clear();
     this.renderSet = [];
@@ -763,12 +788,13 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
       this.renderSet.push(e);
     }
     // Worker が止まったあとは新しいタイルもサブツリーも読まない（読み込み済みのタイルは描き続ける）
-    const canLoad = this.worker !== undefined;
+    const canLoad = this.workers.length > 0;
+    const maxInFlight = Math.max(MIN_IN_FLIGHT, this.workers.length * IN_FLIGHT_PER_WORKER);
     for (const { node } of selection.load) {
       inUse.add(node.id);
       const e = this.tiles.get(node.id);
       if (e) e.lastUsed = now;
-      else if (canLoad && this.inFlight < MAX_IN_FLIGHT) this.requestTile(node);
+      else if (canLoad && this.inFlight < maxInFlight) this.requestTile(node);
     }
 
     // 暗黙的タイリング: 必要になったサブツリーを読み、届いたら選び直す
@@ -788,11 +814,12 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
         });
     }
 
-    // 隣のタイルが届いて判定が古くなったタイルは、表示中のものだけ、新しいタイルの読み込みが落ち着いてから作り直す
-    if (canLoad && this.inFlight === 0) {
+    // 隣のタイルが届いて判定が古くなったタイルは、表示中のものだけ、タイルの選択が落ち着いてから（読み込み中も、読むべきタイルも、
+    // 展開待ちのサブツリーもない）作り直す。読み込みの波の合間に作り直すと、次の波でまた古くなって何度も作り直すことになる
+    if (canLoad && this.inFlight === 0 && selection.load.length === 0 && selection.expand.length === 0) {
       let remeshing = [...this.tiles.values()].filter((e) => e.remeshing).length;
       for (const e of this.renderSet) {
-        if (remeshing >= MAX_REMESH_IN_FLIGHT) break;
+        if (remeshing >= this.workers.length) break;
         if (!e.stale || e.remeshing || !e.node) continue;
         e.stale = false;
         e.remeshing = true;
@@ -812,44 +839,56 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
   }
 
   private requestTile(node: TileNode, remesh = false): void {
-    if (!this.worker) return; // Worker が止まっている（エラーは通知済み）
+    if (!this.workers.length) return; // Worker が止まっている（エラーは通知済み）
     const requestId = ++this.requestId;
     const existing = this.tiles.get(node.id);
-    if (existing && remesh) {
+    let worker: number;
+    if (existing && remesh && existing.owner !== undefined) {
+      // 作り直しは建物のデータを持っている Worker に頼む
+      worker = existing.owner;
       existing.requestId = requestId;
       existing.requestedAt = performance.now();
     } else {
-      this.tiles.set(node.id, { id: node.id, node, state: 'loading', requestId, requestedAt: performance.now(), lastUsed: performance.now() });
+      worker = this.workerLoad.indexOf(Math.min(...this.workerLoad));
+      this.tiles.set(node.id, { id: node.id, node, state: 'loading', requestId, requestedAt: performance.now(), lastUsed: performance.now(), owner: worker });
       this.inFlight++;
     }
-    this.post({ type: 'tile', requestId, tileId: node.id, url: node.contentUrl!, transform: node.transform, remesh });
+    this.post(worker, { type: 'tile', requestId, tileId: node.id, url: node.contentUrl!, transform: node.transform, remesh });
   }
 
   private unloadTile(e: TileEntry): void {
     if (e.gpu && this.gl) deleteTileGpu(this.gl, e.gpu);
     this.tiles.delete(e.id);
-    this.post({ type: 'release', tileId: e.id });
+    this.broadcast({ type: 'release', tileId: e.id });
     this.fire('tileunload', { target: this, tileId: e.id });
   }
 
+  /** Worker のプールを起動する。Worker どうしは MessageChannel で直接つなぎ、展開したタイルの建物を送り合う */
   private startWorker(): boolean {
-    let worker: Worker;
+    const source = this.options.source;
+    const count = source.type === 'geojson' ? 1 : (this.options.workers ?? defaultWorkerCount());
+    const workers: Worker[] = [];
     try {
-      worker = createBuildingWorker(this.options.workerUrl);
+      for (let i = 0; i < count; i++) workers.push(createBuildingWorker(this.options.workerUrl));
     } catch (e) {
+      for (const w of workers) w.terminate();
       this.emitError(new BuildingFacadeLayerError('worker', `Failed to start worker: ${e instanceof Error ? e.message : e}`, { cause: e }));
       return false;
     }
-    this.worker = worker;
+    this.workers = workers;
+    this.workerLoad = workers.map(() => 0);
+    this.initErrorReported = false;
     const generation = this.generation;
-    worker.onmessage = (ev: MessageEvent<WorkerResponse>) => this.onWorkerMessage(ev.data);
-    worker.onerror = (ev: ErrorEvent) => {
-      ev.preventDefault();
-      if (generation !== this.generation) return;
-      this.stopWorker();
-      this.emitError(new BuildingFacadeLayerError('worker', `Worker error: ${ev.message || 'failed to load worker script'}`));
-    };
-    const source = this.options.source;
+    // 全ての組に 1 本ずつ口をつくる（i の peers[j] が j とつながる）
+    const peers: MessagePort[][] = workers.map(() => []);
+    for (let i = 0; i < count; i++) {
+      for (let j = i + 1; j < count; j++) {
+        const channel = new MessageChannel();
+        peers[i].push(channel.port1);
+        peers[j].push(channel.port2);
+      }
+    }
+
     const cache = source.type === '3dtiles' ? resolveTileCacheOptions(source.cache) : undefined;
     const init: InitRequest = {
       type: 'init',
@@ -866,8 +905,17 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
       dracoWasmUrl: source.type === '3dtiles' && source.dracoWasmUrl ? new URL(source.dracoWasmUrl, document.baseURI).href : undefined,
       tileCache: cache ? { maxBytes: cache.maxSizeMB * 1024 * 1024, maxAgeMs: cache.maxAgeDays * 86400000 } : undefined,
     };
-    worker.postMessage(init);
-    worker.postMessage({ type: 'materials', size: MATERIAL_TEXTURE_SIZE } satisfies WorkerRequest);
+    workers.forEach((worker, i) => {
+      worker.onmessage = (ev: MessageEvent<WorkerResponse>) => this.onWorkerMessage(i, ev.data);
+      worker.onerror = (ev: ErrorEvent) => {
+        ev.preventDefault();
+        if (generation !== this.generation || !this.workers.length) return;
+        this.stopWorker();
+        this.emitError(new BuildingFacadeLayerError('worker', `Worker error: ${ev.message || 'failed to load worker script'}`));
+      };
+      worker.postMessage({ ...init, index: i, peers: peers[i] } satisfies InitRequest, peers[i]);
+    });
+    workers[0].postMessage({ type: 'materials', size: MATERIAL_TEXTURE_SIZE } satisfies WorkerRequest);
     return true;
   }
 
@@ -876,8 +924,9 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
    * 以降は新しいタイルを依頼しない。読み込み済みのタイルはそのまま描き続ける
    */
   private stopWorker(): void {
-    this.worker?.terminate();
-    this.worker = undefined;
+    for (const w of this.workers) w.terminate();
+    this.workers = [];
+    this.workerLoad = [];
     for (const [id, e] of this.tiles) {
       if (e.state === 'loading') this.tiles.delete(id);
       else e.remeshing = false;
@@ -886,12 +935,20 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
     this.map?.triggerRepaint();
   }
 
-  private post(req: WorkerRequest): void {
-    this.worker?.postMessage(req);
+  private post(worker: number, req: WorkerRequest): void {
+    const w = this.workers[worker];
+    if (!w) return;
+    if (req.type === 'tile' || req.type === 'build') this.workerLoad[worker]++;
+    w.postMessage(req);
   }
 
-  private onWorkerMessage(msg: WorkerResponse): void {
+  private broadcast(req: WorkerRequest): void {
+    for (const w of this.workers) w.postMessage(req);
+  }
+
+  private onWorkerMessage(worker: number, msg: WorkerResponse): void {
     const gl = this.gl;
+    if ((msg.type === 'built' || msg.type === 'error') && this.workerLoad[worker] > 0) this.workerLoad[worker]--;
     if (msg.type === 'materials') {
       if (gl && this.programs) {
         uploadMaterials(gl, this.programs.materials, msg.textures);
@@ -900,7 +957,9 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
       return;
     }
     if (msg.type === 'initError') {
-      // 設定が不正なので、どのタイルも変換できない。Worker を止めて 1 回だけ知らせる
+      // 設定が不正なので、どのタイルも変換できない。Worker を止めて 1 回だけ知らせる（どの Worker も同じエラーを返す）
+      if (this.initErrorReported) return;
+      this.initErrorReported = true;
       this.stopWorker();
       this.emitError(new BuildingFacadeLayerError(msg.code, msg.message));
       return;
@@ -908,7 +967,7 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
     const entry = msg.tileId !== undefined ? this.tiles.get(msg.tileId) : undefined;
     // 削除後・キャッシュから捨てた後・古いリクエストの応答は捨てる
     if (!gl || !entry || entry.requestId !== msg.requestId) {
-      if (msg.type === 'built' && gl && !entry && msg.tileId !== GEOJSON_TILE) this.post({ type: 'release', tileId: msg.tileId });
+      if (msg.type === 'built' && gl && !entry && msg.tileId !== GEOJSON_TILE) this.broadcast({ type: 'release', tileId: msg.tileId });
       return;
     }
     if (entry.state === 'loading') this.inFlight = Math.max(0, this.inFlight - 1);
@@ -938,10 +997,12 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
     entry.state = 'ready';
     this.fire('tileload', { target: this, tileId: entry.id, stats, timing: { ...msg.timing, total: performance.now() - entry.requestedAt } });
 
-    // 隣のタイルが届いたので、境界付近の壁面の判定が古くなった（作り直しは updateTiles で表示中のものだけ行う）
-    for (const id of msg.affected) {
-      const other = this.tiles.get(id);
-      if (other?.state === 'ready') other.stale = true;
+    // 隣り合うタイルのどちらかが、相手の建物を見ずにメッシュを作っていたら、壁面の判定が古い（作り直しは updateTiles で表示中のものだけ行う）。
+    // Worker は並行して動き、建物は Worker どうしで送り合うので、届く前に作ったメッシュはここで見つけて作り直す
+    if (entry.id !== GEOJSON_TILE) {
+      entry.bounds = stats.bounds;
+      entry.known = new Set(msg.knownTiles);
+      markStaleNeighbors(entry, this.tiles.values());
     }
 
     if (entry.id === GEOJSON_TILE && !this._loaded) {

@@ -10,7 +10,7 @@ import type { TileNode } from '../src/sources/tiles3d/Tileset';
 import { mercatorX, mercatorY, meterInMercator } from '../src/math/mercator';
 import { DEFAULT_STYLE_RULES, PRESET_STYLES } from '../src/style/presets';
 import { RecordFactory, meshRecords, runBuildPipeline } from '../src/worker/buildPipeline';
-import { TileStore } from '../src/worker/TileStore';
+import { TileStore, toObstacle } from '../src/worker/TileStore';
 
 // ---------------------------------------------------------------- b3dm → フットプリント
 
@@ -148,11 +148,12 @@ describe.runIf(LEAVES.every((f) => existsSync(f)) && existsSync(GEOJSON))('tile 
       const { records, skipped } = await factory.build(features, file);
       store.set(String(i), records, skipped);
     }
-    const sum = (withNeighbors: boolean) => {
+    const sum = (withNeighbors: boolean, obstaclesOnly = false) => {
       let party = 0, total = 0;
       for (let i = 0; i < LEAVES.length; i++) {
         const e = store.get(String(i))!;
-        const { stats } = meshRecords(e.records, withNeighbors ? store.neighborsOf(String(i)) : [], config);
+        const neighbors = withNeighbors ? store.neighborsOf(String(i)) : [];
+        const { stats } = meshRecords(e.records, obstaclesOnly ? neighbors.map(toObstacle) : neighbors, config);
         party += stats.facades.party;
         total += stats.total;
       }
@@ -160,6 +161,8 @@ describe.runIf(LEAVES.every((f) => existsSync(f)) && existsSync(GEOJSON))('tile 
     };
     const tiled = sum(true);
     const isolated = sum(false);
+    // 他の Worker から届く建物（壁面の解析に要る値だけ）でも、結果は同じ
+    expect(sum(true, true)).toEqual(tiled);
 
     const fc = JSON.parse(readFileSync(GEOJSON, 'utf8')) as { features: { properties: Record<string, unknown>; geometry: { coordinates: number[][][] } }[] };
     const whole = await runBuildPipeline(

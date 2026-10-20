@@ -8,6 +8,13 @@ import type { StyleRule } from '../style/StyleResolver';
 
 // メインスレッド ⇔ Worker のメッセージ。関数は渡せないので、すべて JSON で表せる設定にする。
 
+/** 壁面の解析で隣のタイルの建物を見る範囲（度）。光線の最大距離 40m より少し広く */
+export const NEIGHBOR_MARGIN_DEG = 0.0005;
+
+/** 2 つの範囲 [west, south, east, north] が margin（度）以内で重なるか。空の範囲（Infinity）は重ならない */
+export const boundsOverlap = (a: readonly number[], b: readonly number[], margin: number): boolean =>
+  Number.isFinite(a[0]) && Number.isFinite(b[0]) && a[0] - margin <= b[2] && a[2] + margin >= b[0] && a[1] - margin <= b[3] && a[3] + margin >= b[1];
+
 /** 変換の設定。Worker は最初に 1 回受け取り、以降のタイルに使う */
 export interface PipelineConfig {
   adapter: AdapterConfig;
@@ -24,6 +31,10 @@ export interface InitRequest {
   dracoWasmUrl?: string;
   /** 展開したタイルを IndexedDB に保存するときの上限（undefined = 保存しない） */
   tileCache?: { maxBytes: number; maxAgeMs: number };
+  /** プール内の番号（0 が起動時の片づけなどを受け持つ） */
+  index?: number;
+  /** 他の Worker への直通の口。展開したタイルの建物（壁面の解析用）を送り合う */
+  peers?: MessagePort[];
 }
 
 /** GeoJSON を一括で読み、1 つのメッシュにする */
@@ -94,8 +105,11 @@ export interface BuildResponse {
   mesh: FacadeMesh;
   stats: BuildingStats;
   timing: TileTiming;
-  /** このタイルの建物が届いたことで、壁面の判定が変わりうる読み込み済みのタイル */
-  affected: string[];
+  /**
+   * メッシュを作ったときに Worker が持っていたタイル（自分で展開したものと、他の Worker から届いたもの）。
+   * 隣のタイルがこの中になければ、壁面の判定が古いのでメインスレッドが作り直しを依頼する
+   */
+  knownTiles: string[];
 }
 
 export interface ErrorResponse {

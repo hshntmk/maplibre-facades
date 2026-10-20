@@ -8,9 +8,9 @@ import { parseTileContent, usesDraco } from '../sources/tiles3d/content';
 import { getDracoModule } from '../sources/tiles3d/draco';
 import { featuresFromTile } from '../sources/tiles3d/footprints';
 import type { SourceFeature } from '../sources/SourceConfig';
-import { RecordFactory, meshRecords } from './buildPipeline';
+import { RecordFactory, meshRecords, type StyledRecord } from './buildPipeline';
 import { TileCache, createTileCache } from './TileCache';
-import { TileStore } from './TileStore';
+import { TileStore, toObstacle } from './TileStore';
 import type { PipelineConfig, WorkerRequest, WorkerResponse } from './protocol';
 
 declare const self: DedicatedWorkerGlobalScope;
@@ -22,6 +22,13 @@ let dracoWasmUrl = DEFAULT_DRACO_WASM_URL;
 let initFailed = false;
 const tiles = new TileStore();
 let tileCache: TileCache | undefined;
+/** 他の Worker への直通の口 */
+let peers: MessagePort[] = [];
+
+/** 他の Worker が展開したタイルの建物（壁面の解析に使う） */
+function onPeerMessage(ev: MessageEvent<{ type: 'obstacles'; tileId: string; records: StyledRecord[] }>) {
+  if (ev.data.type === 'obstacles') tiles.setObstacles(ev.data.tileId, ev.data.records);
+}
 
 async function fetchBytes(url: string): Promise<Uint8Array> {
   try {
@@ -44,9 +51,11 @@ self.onmessage = async (ev: MessageEvent<WorkerRequest>) => {
     if (req.dracoWasmUrl) dracoWasmUrl = req.dracoWasmUrl;
     if (req.tileCache) {
       tileCache = createTileCache(req.tileCache);
-      // 古い形式・期限切れ・上限を超えた分を、起動時に 1 回片づける
-      tileCache?.evict().catch(() => {});
+      // 古い形式・期限切れ・上限を超えた分を、起動時に 1 回片づける（プールの先頭の Worker だけ）
+      if (!req.index) tileCache?.evict().catch(() => {});
     }
+    peers = req.peers ?? [];
+    for (const port of peers) port.onmessage = onPeerMessage;
     try {
       factory = new RecordFactory(req.config);
       config = req.config;
@@ -78,7 +87,7 @@ self.onmessage = async (ev: MessageEvent<WorkerRequest>) => {
       const t1 = performance.now();
       const { mesh, stats } = meshRecords(records, [], config, skipped);
       const timing = { fetch: 0, decode: t1 - t0, mesh: performance.now() - t1, bytes: 0, cached: false, remesh: false, neighbors: 0 };
-      post({ type: 'built', requestId: req.requestId, tileId: req.tileId, mesh, stats, timing, affected: [] }, mesh);
+      post({ type: 'built', requestId: req.requestId, tileId: req.tileId, mesh, stats, timing, knownTiles: [] }, mesh);
       return;
     }
 
@@ -106,6 +115,11 @@ self.onmessage = async (ev: MessageEvent<WorkerRequest>) => {
       }
       const { records, skipped } = await factory.build(features, req.url);
       entry = tiles.set(req.tileId, records, skipped);
+      // 他の Worker が隣のタイルの壁面を解析できるよう、建物を送る（メッシュより先に）
+      if (peers.length) {
+        const obstacles = records.map(toObstacle);
+        for (const port of peers) port.postMessage({ type: 'obstacles', tileId: req.tileId, records: obstacles });
+      }
       timing.decode = performance.now() - (timing.cached ? t0 : t1);
     }
     const t2 = performance.now();
@@ -113,9 +127,8 @@ self.onmessage = async (ev: MessageEvent<WorkerRequest>) => {
     const { mesh, stats } = meshRecords(entry!.records, neighbors, config, entry!.skipped);
     timing.mesh = performance.now() - t2;
     timing.neighbors = neighbors.length;
-    // 新しく届いたタイルは、隣接する読み込み済みタイルの壁面の判定を変えうる
-    const affected = fresh ? tiles.affectedBy(req.tileId) : [];
-    post({ type: 'built', requestId: req.requestId, tileId: req.tileId, mesh, stats, timing, affected }, mesh);
+    // どの隣のタイルを見て作ったか（足りなければメインスレッドが作り直しを依頼する）
+    post({ type: 'built', requestId: req.requestId, tileId: req.tileId, mesh, stats, timing, knownTiles: tiles.ids() }, mesh);
     // 保存（JSON 化と圧縮）は表示を待たせないよう、応答のあとで行う
     if (toCache) void tileCache?.put(toCache.key, toCache.features);
   } catch (e) {

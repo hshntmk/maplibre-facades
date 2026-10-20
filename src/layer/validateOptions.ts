@@ -100,6 +100,7 @@ export function validateLayerOptions(opts: {
   interior?: unknown;
   terrain?: unknown;
   fog?: unknown;
+  workers?: unknown;
   debug?: unknown;
 }): void {
   if (typeof opts.id !== 'string' || !opts.id) fail('id must be a non-empty string');
@@ -138,5 +139,6 @@ export function validateLayerOptions(opts: {
   if (opts.interior !== undefined && typeof opts.interior !== 'boolean') fail('interior must be a boolean');
   if (opts.terrain !== undefined && typeof opts.terrain !== 'boolean') fail('terrain must be a boolean');
   if (opts.fog !== undefined && typeof opts.fog !== 'boolean') fail('fog must be a boolean');
+  if (opts.workers !== undefined && (!Number.isInteger(opts.workers) || (opts.workers as number) < 1 || (opts.workers as number) > 16)) fail(`workers must be an integer between 1 and 16 (got ${JSON.stringify(opts.workers)})`);
   if (opts.debug !== undefined && !(DEBUG_MODES as readonly unknown[]).includes(opts.debug)) fail(`unknown debug mode: ${opts.debug}`);
 }

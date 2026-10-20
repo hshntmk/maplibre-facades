@@ -103,6 +103,8 @@ const layer = new BuildingFacadeLayer({
       ? { type: 'geojson', url: `${import.meta.env.BASE_URL}data/13101_bldg_lod1.geojson` }
       : { type: '3dtiles', url: TOKYO_23_WARDS.map((w) => w.url) },
   adapter: { name: 'plateau' },
+  // 確認用: ?workers=N で Worker の数を変えられる（既定は CPU のコア数の半分、1〜4）
+  workers: Number(new URLSearchParams(location.search).get('workers')) || undefined,
   timeOfDay: 20,
 });
 // 3D Tiles ではタイルが増減するたびに凡例を更新する（まとめて 1 フレームに 1 回）
