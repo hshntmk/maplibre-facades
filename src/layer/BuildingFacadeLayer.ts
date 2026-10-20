@@ -154,6 +154,8 @@ interface MaterialGpu {
   ready: boolean;
   periods: Float32Array;
   averages: Float32Array;
+  metals: Float32Array;
+  tints: Float32Array;
   levels: number;
 }
 
@@ -551,6 +553,8 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
     gl.uniform1i(f.uniforms.u_materials, 1);
     gl.uniform2fv(f.uniforms.u_materialPeriod, mat.periods);
     gl.uniform2fv(f.uniforms.u_materialAverage, mat.averages);
+    gl.uniform1fv(f.uniforms.u_materialMetal, mat.metals);
+    gl.uniform4fv(f.uniforms.u_materialTint, mat.tints);
     gl.uniform1f(f.uniforms.u_materialLevels, mat.levels);
     forEachTile(f, (t) => {
       gl.bindVertexArray(t.walls.vao);
@@ -892,6 +896,8 @@ function createMaterialGpu(gl: WebGL2RenderingContext): MaterialGpu {
     ready: false,
     periods: new Float32Array(MAX_WALL_MATERIALS * 2).fill(1),
     averages: new Float32Array(MAX_WALL_MATERIALS * 2).fill(1),
+    metals: new Float32Array(MAX_WALL_MATERIALS),
+    tints: new Float32Array(MAX_WALL_MATERIALS * 4),
     levels: Math.log2(size),
   };
 }
@@ -912,6 +918,8 @@ function uploadMaterials(gl: WebGL2RenderingContext, mat: MaterialGpu, textures:
     });
     mat.periods.set(m.period, layer * 2);
     mat.averages.set(m.average, layer * 2);
+    mat.metals[layer] = m.metalness;
+    mat.tints.set(m.tint, layer * 4);
   });
   gl.bindTexture(gl.TEXTURE_2D_ARRAY, previous);
   for (const [p, v] of saved) gl.pixelStorei(p, v as number);

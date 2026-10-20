@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createMaterialTexture } from '../src/material/WallMaterials';
+import { MATERIAL_PROPS, MAX_WALL_MATERIALS, WALL_MATERIALS, createMaterialTexture, type WallMaterialName } from '../src/material/WallMaterials';
 
 describe('createMaterialTexture (tile)', () => {
   const size = 128;
@@ -61,5 +61,60 @@ describe('createMaterialTexture (tile)', () => {
 
   it('is cached', () => {
     expect(createMaterialTexture('tile', size)).toBe(tex);
+  });
+});
+
+describe('wall materials (concrete, stone, metal)', () => {
+  const size = 128;
+  const stats = (name: WallMaterialName) => {
+    const tex = createMaterialTexture(name, size);
+    const l = tex.levels[0];
+    const px = Array.from({ length: size * size }, (_, i) => ({ rough: l[i * 4 + 2] / 255, cavity: l[i * 4 + 3] / 255 }));
+    return { tex, px, share: (f: (p: { rough: number; cavity: number }) => boolean) => px.filter(f).length / px.length };
+  };
+
+  it('defines properties and a full mip chain for every material', () => {
+    expect(WALL_MATERIALS.length).toBeLessThanOrEqual(MAX_WALL_MATERIALS);
+    for (const name of WALL_MATERIALS) {
+      const tex = createMaterialTexture(name, size);
+      expect(tex.levels, name).toHaveLength(Math.log2(size) + 1);
+      expect(tex.period[0], name).toBe(MATERIAL_PROPS[name].period);
+      expect(tex.metalness, name).toBe(MATERIAL_PROPS[name].metalness);
+    }
+  });
+
+  it('tiles seamlessly', () => {
+    for (const name of ['concrete', 'stone', 'metal'] as const) {
+      const l = createMaterialTexture(name, size).levels[0];
+      const at = (x: number, y: number) => ((y % size) * size + (x % size)) * 4;
+      const diff = (a: number, b: number) => Math.abs(l[a + 2] - l[b + 2]) + Math.abs(l[a + 3] - l[b + 3]);
+      let edge = 0, inner = 0;
+      for (let y = 0; y < size; y++) {
+        edge += diff(at(size - 1, y), at(0, y));
+        inner += diff(at(size / 2 - 1, y), at(size / 2, y));
+      }
+      // 端をまたいだ差が、内側の隣どうしの差と同程度（継ぎ目の溝がちょうど端に来る分は許す）
+      expect(edge, name).toBeLessThan(inner * 3 + size * 40);
+    }
+  });
+
+  it('gives each material its own character', () => {
+    const concrete = stats('concrete'), stone = stats('stone'), metal = stats('metal');
+    // コンクリート打ち放し: ほとんどが粗い面で、暗いセパ穴がある
+    expect(concrete.share((p) => p.rough > 0.6)).toBeGreaterThan(0.9);
+    expect(concrete.share((p) => p.cavity < 0.6)).toBeGreaterThan(0);
+    // 石張り: 磨いた面（つやが強い）がほとんどで、目地がある
+    expect(stone.share((p) => p.rough < 0.3)).toBeGreaterThan(0.8);
+    expect(stone.share((p) => p.rough > 0.5)).toBeGreaterThan(0.005);
+    // 金属パネル: 金属で、つやが強く、開いた目地は暗い
+    expect(metal.tex.metalness).toBe(1);
+    expect(metal.share((p) => p.rough < 0.35)).toBeGreaterThan(0.9);
+    expect(metal.share((p) => p.cavity < 0.4)).toBeGreaterThan(0.002);
+  });
+
+  it('pulls exposed concrete toward gray', () => {
+    const [r, g, b, amount] = MATERIAL_PROPS.concrete.tint;
+    expect(Math.max(r, g, b) - Math.min(r, g, b)).toBeLessThan(0.05);
+    expect(amount).toBeGreaterThan(0.5);
   });
 });

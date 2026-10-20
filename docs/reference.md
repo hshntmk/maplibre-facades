@@ -665,19 +665,19 @@ const PRESET_STYLES: Record<string, FacadeStyle>;
 
 11 個のスタイルを持つ。`generic` 以外は `generic` の値を基にし、一部の項目を上書きしている。
 
-| 名前 | `windowSpacing` | `windowWidth` | `groundFloor` | `interior` | `reflectivity` | `windowsPerRoom` | `openPlanRatio` | `wallMaterials.tile` |
+| 名前 | `windowSpacing` | `windowWidth` | `groundFloor` | `interior` | `reflectivity` | `windowsPerRoom` | `openPlanRatio` | `wallMaterials` |
 |---|---|---|---|---|---|---|---|---|
-| `generic` | 3.2 | 0.5 | `same` | `office` | 0.25 | 2 | 0.1 | 0.3 |
+| `generic` | 3.2 | 0.5 | `same` | `office` | 0.25 | 2 | 0.1 | `{ tile: 0.3, concrete: 0.1, metal: 0.05 }` |
 | `plain` | 3.2 | 0 | `same` | `office` | 0.25 | 2 | 0.1 | — |
-| `curtainWall` | 1.8 | 0.96 | `lobby` | `office` | 0.8 | 6 | 0.5 | — |
-| `office` | 3.2 | 0.66 | `lobby` | `office` | 0.45 | 4 | 0.35 | 0.35 |
-| `apartment` | 3.6 | 0.52 | `same` | `residential` | 0.12 | 1 | 0 | 0.6 |
-| `house` | 3.0 | 0.38 | `same` | `residential` | 0.08 | 1 | 0 | — |
-| `mixed` | 3.2 | 0.46 | `storefront` | `residential` | 0.25 | 1 | 0 | 0.5 |
-| `commercial` | 4.5 | 0.8 | `storefront` | `shop` | 0.5 | 6 | 0.7 | 0.2 |
-| `hotel` | 2.6 | 0.46 | `lobby` | `residential` | 0.25 | 1 | 0 | 0.4 |
-| `institutional` | 3.4 | 0.72 | `lobby` | `office` | 0.25 | 3 | 0.1 | 0.3 |
-| `industrial` | 6 | 0.26 | `same` | `warehouse` | 0.25 | 8 | 0.8 | — |
+| `curtainWall` | 1.8 | 0.96 | `lobby` | `office` | 0.8 | 6 | 0.5 | `{ metal: 0.6 }` |
+| `office` | 3.2 | 0.66 | `lobby` | `office` | 0.45 | 4 | 0.35 | `{ tile: 0.35, concrete: 0.05, stone: 0.2, metal: 0.15 }` |
+| `apartment` | 3.6 | 0.52 | `same` | `residential` | 0.12 | 1 | 0 | `{ tile: 0.6, concrete: 0.05 }` |
+| `house` | 3 | 0.38 | `same` | `residential` | 0.08 | 1 | 0 | — |
+| `mixed` | 3.2 | 0.46 | `storefront` | `residential` | 0.25 | 1 | 0 | `{ tile: 0.5 }` |
+| `commercial` | 4.5 | 0.8 | `storefront` | `shop` | 0.5 | 6 | 0.7 | `{ tile: 0.2, stone: 0.1, metal: 0.3 }` |
+| `hotel` | 2.6 | 0.46 | `lobby` | `residential` | 0.25 | 1 | 0 | `{ tile: 0.4, stone: 0.2 }` |
+| `institutional` | 3.4 | 0.72 | `lobby` | `office` | 0.25 | 3 | 0.1 | `{ tile: 0.3, concrete: 0.25, stone: 0.1 }` |
+| `industrial` | 6 | 0.26 | `same` | `warehouse` | 0.25 | 8 | 0.8 | `{ metal: 0.5 }` |
 
 ほかの項目の値は `PRESET_STYLES` を直接参照する。
 
@@ -847,15 +847,26 @@ interface SurfaceDetailOptions {
 素材のテクスチャ:
 
 - Worker がレイヤーの初期化時に手続き的に生成する。画像ファイルは取得しない。
-- 1 素材あたり 256 × 256 テクセルの RGBA8 で、ミップマップを持つ。
+- 1 素材あたり 256 × 256 テクセルの RGBA8 で、ミップマップを持つ。4 素材をまとめて 1 つのテクスチャ配列にする（約 1.4 MB）。
 - テクスチャが届くまで、外壁は素材なしで描かれる。
 - 目地の幅が 1 ピクセル未満になる距離では、テクスチャを参照せず、素材の平均値を使う。
 
 `WALL_MATERIALS` の値:
 
-| 名前 | 内容 |
-|---|---|
-| `tile` | 二丁掛けタイル（227 × 60 mm）、破れ目地張り。 |
+| 名前 | テクスチャ 1 枚の大きさ | 内容 |
+|---|---|---|
+| `tile` | 0.98 m 四方 | 二丁掛けタイル（227 × 60 mm）、破れ目地張り。目地幅 10 mm。タイルごとに傾き・光沢・色むらが異なる。 |
+| `concrete` | 1.8 m 四方 | コンクリート打ち放し。型枠（900 × 1800 mm）の継ぎ目、450 mm 間隔のセパ穴（Φ25 mm）、型枠・打設ごとの色むら。外壁の色を灰色（`[0.6, 0.6, 0.58]`）に 85% 寄せる。 |
+| `stone` | 1.8 m 四方 | 石張り（御影石の本磨き）。900 × 600 mm の芋目地、目地幅 8 mm。光沢が強く、細かい斑点がある。 |
+| `metal` | 2.0 m 四方 | 金属パネル（1000 × 2000 mm）。幅 10 mm の開いた目地、パネルごとの膨らみ・へこみ。金属として描く（下記）。 |
+
+`metal` は金属として描かれる。
+
+- 拡散反射は 30% だけ残す。この 30% は、周囲の建物や空のぼやけた映り込みを近似するものである。
+- 鏡面反射の反射率（F0）は外壁の色になる。ほかの素材の F0 は 0.04 である。
+- 素材の平均値を使う距離でも、空の映り込みを描く。
+
+`wallMaterials` の割合はスタイルのテクスチャに詰められる。指定できる素材は最大 5 種類である（現在は 4 種類）。
 
 `ResolvedSurfaceDetailOptions` は `Required<SurfaceDetailOptions>` である。
 
@@ -1062,7 +1073,7 @@ function getWorkerUrl(): string | URL | undefined
 | `DEFAULT_WEATHERING_OPTIONS` | `Readonly<ResolvedWeatheringOptions>` | [8.2](#82-weatheringoptions) の既定値。 |
 | `DEFAULT_SURFACE_DETAIL_OPTIONS` | `Readonly<ResolvedSurfaceDetailOptions>` | [8.3](#83-surfacedetailoptions) の既定値。 |
 | `DEFAULT_DRACO_WASM_URL` | `string` | `'https://cdn.jsdelivr.net/npm/draco3d@1.5.7/draco_decoder.wasm'` |
-| `WALL_MATERIALS` | `readonly ['tile']` | 外壁の素材名。 |
+| `WALL_MATERIALS` | `readonly ['tile', 'concrete', 'stone', 'metal']` | 外壁の素材名。 |
 | `BUILDING_CATEGORIES` | `readonly BuildingCategory[]` | `'unknown'`, `'office'`, `'commercial'`, `'hotel'`, `'mixed_commercial'`, `'house'`, `'apartment'`, `'mixed_house'`, `'mixed_apartment'`, `'public'`, `'education_welfare'`, `'warehouse'`, `'factory'`, `'utility'`, `'other'` |
 | `CATEGORY_COLORS` | `Readonly<Record<BuildingCategory, RGB>>` | `'category'` 表示の色。 |
 | `FACADE_COLORS` | `Readonly<Record<'party' \| 'side' \| 'front' \| 'sunSide', RGB>>` | `'facade'` 表示の色。 |

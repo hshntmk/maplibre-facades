@@ -39,9 +39,10 @@ export interface FacadeStyle {
   weathering: number;
   /**
    * 外壁の素材と、それを使う建物の割合 (0–1、合計 1 以下)。残りは素材なし（塗装などの平らな面）。
-   * 素材は凹凸（目地）とつやを持ち、近くでは陰影、遠くでは日の当たり方の違いとして見える。界壁には使わない
+   * 素材は凹凸（目地）とつやを持ち、近くでは陰影、遠くでは日の当たり方の違いとして見える。界壁には使わない。
+   * `tile`（二丁掛けタイル）、`concrete`（コンクリート打ち放し。外壁の色は灰色に寄せる）、`stone`（石張り）、`metal`（金属パネル）
    * ```ts
-   * wallMaterials: { tile: 0.6 } // 6 割の建物をタイル張りにする
+   * wallMaterials: { tile: 0.5, concrete: 0.1 } // 5 割をタイル張り、1 割をコンクリート打ち放しにする
    * ```
    */
   wallMaterials?: Partial<Record<WallMaterialName, number>>;
@@ -132,8 +133,10 @@ function packPalette(colors: PaletteColor[] | undefined, fallback: RGB, size: nu
   return out;
 }
 
-/** シェーダ側の styleTexel() の番号とレイアウトを合わせること（10–15: 外壁の候補、16–19: ガラスの候補、20: 汚れやすさと素材の割合、21: 部屋の大きさ） */
+/** シェーダ側の styleTexel() の番号とレイアウトを合わせること（10–15: 外壁の候補、16–19: ガラスの候補、20: 汚れやすさと素材の割合 1–3、21: 部屋の大きさと素材の割合 4–5） */
 export function packStyle(s: FacadeStyle, out: Float32Array, offset: number): void {
+  // 素材の割合（WALL_MATERIALS の順）。テクセル 20 の yzw と 21 の zw に詰める
+  const ratios = Array.from({ length: MAX_WALL_MATERIALS }, (_, i) => (i < WALL_MATERIALS.length ? (s.wallMaterials?.[WALL_MATERIALS[i]] ?? 0) : 0));
   const v = [
     s.windowSpacing, s.windowWidth, s.windowHeight, s.sill,
     ...s.wallColor, s.wallVariation,
@@ -147,8 +150,8 @@ export function packStyle(s: FacadeStyle, out: Float32Array, offset: number): vo
     FINISH[s.roofFinish], s.greenRoofRatio, s.solarRatio, s.rooftopEquipment,
     ...packPalette(s.wallColors, s.wallColor, WALL_PALETTE_SIZE),
     ...packPalette(s.glassTints, s.glassTint, GLASS_PALETTE_SIZE),
-    s.weathering, ...WALL_MATERIALS.map((m) => s.wallMaterials?.[m] ?? 0), ...new Array(MAX_WALL_MATERIALS - WALL_MATERIALS.length).fill(0),
-    s.windowsPerRoom ?? 1, s.openPlanRatio ?? 0, 0, 0,
+    s.weathering, ratios[0], ratios[1], ratios[2],
+    s.windowsPerRoom ?? 1, s.openPlanRatio ?? 0, ratios[3], ratios[4],
   ];
   out.set(v, offset);
 }

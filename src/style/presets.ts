@@ -3,7 +3,7 @@ import type { StyleRule } from './StyleResolver';
 
 const base: FacadeStyle = {
   weathering: 0.6,
-  wallMaterials: { tile: 0.3 },
+  wallMaterials: { tile: 0.3, concrete: 0.1, metal: 0.05 },
   wallColors: [
     { color: [0.74, 0.72, 0.7], weight: 3 },   // ライトグレー
     { color: [0.8, 0.75, 0.66], weight: 2 },   // ベージュ
@@ -70,7 +70,7 @@ export const PRESET_STYLES: Record<string, FacadeStyle> = {
   curtainWall: {
     ...base,
     weathering: 0.25,
-    wallMaterials: {},
+    wallMaterials: { metal: 0.6 },
     wallColors: [
       { color: [0.2, 0.24, 0.29], weight: 3 },   // 濃紺
       { color: [0.16, 0.17, 0.19], weight: 2 },  // 黒
@@ -113,7 +113,7 @@ export const PRESET_STYLES: Record<string, FacadeStyle> = {
   office: {
     ...base,
     weathering: 0.6,
-    wallMaterials: { tile: 0.35 },
+    wallMaterials: { tile: 0.35, stone: 0.2, metal: 0.15, concrete: 0.05 },
     wallColors: [
       { color: [0.72, 0.71, 0.68], weight: 3 },  // ライトグレー
       { color: [0.84, 0.84, 0.81], weight: 2 },  // 白
@@ -153,7 +153,7 @@ export const PRESET_STYLES: Record<string, FacadeStyle> = {
   apartment: {
     ...base,
     weathering: 0.7,
-    wallMaterials: { tile: 0.6 },
+    wallMaterials: { tile: 0.6, concrete: 0.05 },
     wallColors: [
       { color: [0.88, 0.84, 0.74], weight: 3 },  // クリーム
       { color: [0.9, 0.9, 0.88], weight: 2 },    // 白
@@ -260,7 +260,7 @@ export const PRESET_STYLES: Record<string, FacadeStyle> = {
   commercial: {
     ...base,
     weathering: 0.5,
-    wallMaterials: { tile: 0.2 },
+    wallMaterials: { tile: 0.2, metal: 0.3, stone: 0.1 },
     wallColors: [
       { color: [0.62, 0.62, 0.64], weight: 3 },  // グレー
       { color: [0.85, 0.85, 0.85], weight: 2 },  // 白
@@ -300,7 +300,7 @@ export const PRESET_STYLES: Record<string, FacadeStyle> = {
   hotel: {
     ...base,
     weathering: 0.45,
-    wallMaterials: { tile: 0.4 },
+    wallMaterials: { tile: 0.4, stone: 0.2 },
     wallColors: [
       { color: [0.86, 0.82, 0.74], weight: 3 },  // クリーム
       { color: [0.78, 0.78, 0.76], weight: 2 },  // ライトグレー
@@ -329,7 +329,7 @@ export const PRESET_STYLES: Record<string, FacadeStyle> = {
   institutional: {
     ...base,
     weathering: 0.65,
-    wallMaterials: { tile: 0.3 },
+    wallMaterials: { tile: 0.3, concrete: 0.25, stone: 0.1 },
     wallColors: [
       { color: [0.72, 0.71, 0.68], weight: 3 },  // コンクリート
       { color: [0.62, 0.42, 0.33], weight: 2 },  // れんが
@@ -359,7 +359,7 @@ export const PRESET_STYLES: Record<string, FacadeStyle> = {
   industrial: {
     ...base,
     weathering: 0.85,
-    wallMaterials: {},
+    wallMaterials: { metal: 0.5 },
     wallColors: [
       { color: [0.62, 0.63, 0.62], weight: 3 },  // グレー
       { color: [0.6, 0.66, 0.7], weight: 2 },    // 青みのグレー

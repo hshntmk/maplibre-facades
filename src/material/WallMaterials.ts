@@ -1,16 +1,34 @@
 // 外壁の素材（法線とつや）のテクスチャ。画像を配布せず、レイヤーの初期化時に手続き的に作る。
-// RGBA8 の 1 テクセル = 法線の xy（-1..1 を 0..255）、ラフネス (0..1)、凹み（目地などの暗さ。1 = そのまま）。
+// RGBA8 の 1 テクセル = 法線の xy（-1..1 を 0..255）、ラフネス (0..1)、凹み（目地・穴・斑点などの暗さ。1 = そのまま）。
 // ミップマップは自前で作り、細かい凹凸が平均されて消える分をラフネスに足す（遠くから見ても質感の平均が保たれる）。
 // シェーダ側（FACADE_FS の u_materials）とチャンネルの意味を合わせること。
 
-export const WALL_MATERIALS = ['tile'] as const;
+/** 素材の番号はこの順（テクスチャ配列の層、スタイルに詰める割合の順） */
+export const WALL_MATERIALS = ['tile', 'concrete', 'stone', 'metal'] as const;
 export type WallMaterialName = (typeof WALL_MATERIALS)[number];
 
-/** テクスチャの 1 辺のテクセル数。0.98m 四方に 256 = 約 3.8mm / テクセル（目地 10mm が 2〜3 テクセル） */
+/** テクスチャの 1 辺のテクセル数。タイル（0.98m 四方）で約 3.8mm、ほかの素材（1.8〜2m 四方）で約 7〜8mm / テクセル */
 export const MATERIAL_TEXTURE_SIZE = 256;
 
-/** スタイルに指定できる素材の数（スタイルのテクセル 20 の yzw に割合を詰める） */
-export const MAX_WALL_MATERIALS = 3;
+/** 素材の数の上限（スタイルのテクセル 20 の yzw と 21 の zw に割合を詰める） */
+export const MAX_WALL_MATERIALS = 5;
+
+/** 素材ごとの性質。シェーダに uniform で渡す */
+export interface MaterialProps {
+  /** テクスチャ 1 枚が覆う壁の大きさ (m)。正方形 */
+  period: number;
+  /** 金属らしさ (0–1)。1 は拡散反射がなく、映り込みに素材の色が付く */
+  metalness: number;
+  /** 外壁の色を寄せる色と割合 [r, g, b, 割合]。コンクリート打ち放しは灰色に寄せる */
+  tint: [number, number, number, number];
+}
+
+export const MATERIAL_PROPS: Readonly<Record<WallMaterialName, MaterialProps>> = {
+  tile: { period: 0.98, metalness: 0, tint: [0, 0, 0, 0] },
+  concrete: { period: 1.8, metalness: 0, tint: [0.6, 0.6, 0.58, 0.85] },
+  stone: { period: 1.8, metalness: 0, tint: [0, 0, 0, 0] },
+  metal: { period: 2.0, metalness: 1, tint: [0, 0, 0, 0] },
+};
 
 export interface MaterialTexture {
   /** 1 辺のテクセル数（2 のべき乗） */
@@ -21,6 +39,8 @@ export interface MaterialTexture {
   levels: Uint8Array[];
   /** 1×1 のミップと同じ値（遠景ではテクスチャを読まずにこれを使う）。[ラフネス, 凹み] */
   average: [number, number];
+  metalness: number;
+  tint: [number, number, number, number];
 }
 
 const hash = (a: number, b: number, c = 0): number => {
@@ -103,11 +123,115 @@ function tileSurface(size: number, period: number): Surface {
   return { height, roughness, cavity };
 }
 
+/** 目地の溝（幅がテクセルより細いものは、テクセル幅のなだらかな溝にする） */
+const groove = (distance: number, halfWidth: number, texel: number) => 1 - smoothstep(halfWidth, halfWidth + texel, distance);
+
+/**
+ * コンクリート打ち放し。型枠（900 × 1800 mm）の継ぎ目の細い溝と、450 mm 間隔のセパ穴（Φ25 mm、深さ 8 mm）。
+ * 面は細かい気泡とゆるい凹凸があり、型枠ごと・打設ごとに色がむらになる。1 枚 = 型枠 2 枚分（1.8 m 四方）
+ */
+function concreteSurface(size: number, period: number): Surface {
+  const panelW = 0.9, panelH = 1.8, holeR = 0.0125, texel = period / size;
+  const height = new Float32Array(size * size);
+  const roughness = new Float32Array(size * size);
+  const cavity = new Float32Array(size * size);
+  const pores = tiledNoise(96, 31), waves = tiledNoise(6, 37), pour = tiledNoise(3, 41);
+  const panelTone = [0, 1].map((i) => hash(i, 0, 43));
+  for (let py = 0; py < size; py++) {
+    const y = ((py + 0.5) / size) * period;
+    const ly = y % panelH;
+    for (let px = 0; px < size; px++) {
+      const x = ((px + 0.5) / size) * period;
+      const panel = Math.floor(x / panelW);
+      const lx = x - panel * panelW;
+      const seam = groove(Math.min(lx, panelW - lx, ly, panelH - ly), 0.0015, texel);
+      // セパ穴: 型枠の中で 3 列 × 4 段
+      const hx = (Math.floor(lx / 0.3) + 0.5) * 0.3, hy = (Math.floor(ly / 0.45) + 0.5) * 0.45;
+      const hole = 1 - smoothstep(holeR - texel * 0.5, holeR + texel * 0.5, Math.hypot(lx - hx, ly - hy));
+      const u = x / period, v = y / period;
+      const pore = pores(u * 96, v * 96);
+      const i = py * size + px;
+      height[i] = (waves(u * 6, v * 6) - 0.5) * 0.0012 + (pore - 0.5) * 0.0003 - seam * 0.0015 - hole * 0.008;
+      roughness[i] = 0.72 + (pore - 0.5) * 0.12 + hole * 0.2;
+      cavity[i] = (0.95 + panelTone[panel] * 0.08) * (0.95 + pour(u * 3, v * 3) * 0.08) * (1 - 0.1 * seam) * (1 - 0.5 * hole) * (pore < 0.12 ? 0.85 : 1);
+    }
+  }
+  return { height, roughness, cavity };
+}
+
+/**
+ * 石張り（御影石の本磨き）。900 × 600 mm の芋目地、目地幅 8 mm（シーリング）。
+ * 磨いた面は強いつやがあり、石ごとに色合いが少し違い、細かい斑点がある。1 枚 = 2 列 × 3 段（1.8 m 四方）
+ */
+function stoneSurface(size: number, period: number): Surface {
+  const stoneW = 0.9, stoneH = 0.6, texel = period / size;
+  const height = new Float32Array(size * size);
+  const roughness = new Float32Array(size * size);
+  const cavity = new Float32Array(size * size);
+  const speckle = tiledNoise(128, 51), veins = tiledNoise(12, 53);
+  const rand = Array.from({ length: 2 * 3 * 3 }, (_, i) => hash(Math.floor(i / 3), i % 3, 57));
+  for (let py = 0; py < size; py++) {
+    const y = ((py + 0.5) / size) * period;
+    const row = Math.floor(y / stoneH);
+    const ly = y - row * stoneH;
+    for (let px = 0; px < size; px++) {
+      const x = ((px + 0.5) / size) * period;
+      const col = Math.floor(x / stoneW);
+      const lx = x - col * stoneW;
+      const joint = groove(Math.min(lx, stoneW - lx, ly, stoneH - ly), 0.004, texel);
+      const r = (row * 2 + col) * 3;
+      const u = x / period, v = y / period;
+      const sp = speckle(u * 128, v * 128);
+      // 斑点: 濃い粒と白い粒
+      const grain = sp > 0.72 ? 0.72 : sp < 0.18 ? 1.1 : 1;
+      // 石ごとのわずかな傾き（±0.1°）
+      const tilt = ((rand[r] - 0.5) * (lx - stoneW / 2) + (rand[r + 1] - 0.5) * (ly - stoneH / 2)) * 0.0035;
+      const i = py * size + px;
+      height[i] = (1 - joint) * tilt - joint * 0.006;
+      roughness[i] = (1 - joint) * (0.16 + rand[r + 2] * 0.08) + joint * 0.6;
+      cavity[i] = (1 - joint) * (0.93 + rand[r + 2] * 0.12) * grain * (0.96 + veins(u * 12, v * 12) * 0.06) + joint * 0.55;
+    }
+  }
+  return { height, roughness, cavity };
+}
+
+/**
+ * 金属パネル（アルミ複合板など）。1000 × 2000 mm、目地は幅 10 mm の開いた目地。
+ * 面はつやが強く、パネルごとにわずかにふくらむ・へこむ（オイルキャンニング）ので、映り込みがパネルごとにゆがむ。
+ * 1 枚 = 2 列 × 1 段（2 m 四方）
+ */
+function metalSurface(size: number, period: number): Surface {
+  const panelW = 1.0, panelH = 2.0, texel = period / size;
+  const height = new Float32Array(size * size);
+  const roughness = new Float32Array(size * size);
+  const cavity = new Float32Array(size * size);
+  const rand = [0, 1].map((i) => [hash(i, 0, 61), hash(i, 0, 67)]);
+  for (let py = 0; py < size; py++) {
+    const y = ((py + 0.5) / size) * period;
+    const ly = y % panelH;
+    for (let px = 0; px < size; px++) {
+      const x = ((px + 0.5) / size) * period;
+      const panel = Math.floor(x / panelW);
+      const lx = x - panel * panelW;
+      const joint = groove(Math.min(lx, panelW - lx, ly, panelH - ly), 0.005, texel);
+      const [bowR, toneR] = rand[panel];
+      const su = (2 * lx) / panelW - 1, sv = (2 * ly) / panelH - 1;
+      const bow = (bowR - 0.5) * 0.004 * (1 - su * su) * (1 - sv * sv);
+      const i = py * size + px;
+      height[i] = (1 - joint) * bow - joint * 0.02;
+      roughness[i] = (1 - joint) * (0.2 + toneR * 0.08) + joint * 0.9;
+      cavity[i] = (1 - joint) * (0.96 + toneR * 0.06) + joint * 0.25;
+    }
+  }
+  return { height, roughness, cavity };
+}
+
 const GENERATORS: Record<WallMaterialName, (size: number, period: number) => Surface> = {
   tile: tileSurface,
+  concrete: concreteSurface,
+  stone: stoneSurface,
+  metal: metalSurface,
 };
-
-const PERIODS: Record<WallMaterialName, number> = { tile: 0.98 };
 
 const cache = new Map<string, MaterialTexture>();
 
@@ -117,7 +241,7 @@ export function createMaterialTexture(name: WallMaterialName, size = MATERIAL_TE
   const hit = cache.get(key);
   if (hit) return hit;
 
-  const period = PERIODS[name];
+  const { period, metalness, tint } = MATERIAL_PROPS[name];
   const s = GENERATORS[name](size, period);
   const texel = period / size;
 
@@ -178,7 +302,7 @@ export function createMaterialTexture(name: WallMaterialName, size = MATERIAL_TE
     cavity = down(cavity);
   }
 
-  const tex: MaterialTexture = { size, period: [period, period], levels, average };
+  const tex: MaterialTexture = { size, period: [period, period], levels, average, metalness, tint };
   cache.set(key, tex);
   return tex;
 }

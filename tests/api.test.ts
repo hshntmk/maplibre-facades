@@ -155,6 +155,8 @@ describe('BuildingFacadeLayer: surfaceDetail', () => {
       validateLayerOptions({ ...valid, styles: { ...PRESET_STYLES, office: { ...PRESET_STYLES.office, wallMaterials: wallMaterials as never } } });
     expect(() => withMaterials({ tile: 1 })).not.toThrow();
     expect(optionsError(() => withMaterials({ marble: 0.5 })).message).toMatch(/unknown material 'marble'/);
+    expect(() => withMaterials({ tile: 0.25, concrete: 0.25, stone: 0.25, metal: 0.25 })).not.toThrow();
+    optionsError(() => withMaterials({ concrete: 0.6, metal: 0.6 }));
     optionsError(() => withMaterials({ tile: 1.2 }));
     optionsError(() => withMaterials([0.5]));
     const withRooms = (patch: object) => validateLayerOptions({ ...valid, styles: { ...PRESET_STYLES, office: { ...PRESET_STYLES.office, ...patch } } });
@@ -339,10 +341,11 @@ describe('packStyle', () => {
     expect(Array.from(single.slice(40, 44)).map((v) => Math.round(v * 100) / 100)).toEqual([...PRESET_STYLES.office.wallColor, 1]);
     expect(Array.from(single.slice(64, 68)).map((v) => Math.round(v * 100) / 100)).toEqual([...PRESET_STYLES.office.glassTint, 1]);
     expect(single[80]).toBeCloseTo(PRESET_STYLES.office.weathering); // texel 20: 汚れやすさ
-    expect(single[81]).toBeCloseTo(PRESET_STYLES.office.wallMaterials!.tile!); // texel 20.y: タイルの割合
-    expect(single[82]).toBe(0);
+    // 素材の割合: tile, concrete, stone → texel 20.yzw、metal → texel 21.z、5 番目の枠（21.w）は空き
+    const m = PRESET_STYLES.office.wallMaterials!;
+    expect([single[81], single[82], single[83], single[86], single[87]].map((v) => Math.round(v * 100) / 100)).toEqual([m.tile, m.concrete, m.stone, m.metal, 0]);
     packStyle({ ...PRESET_STYLES.office, wallMaterials: undefined }, single, 0);
-    expect(single[81]).toBe(0);
+    expect([single[81], single[82], single[83], single[86]]).toEqual([0, 0, 0, 0]);
     // texel 21: 部屋の大きさ（省略時は窓 1 枚 = 1 部屋、ワンフロアなし）
     expect([single[84], single[85]]).toEqual([PRESET_STYLES.office.windowsPerRoom, Math.fround(PRESET_STYLES.office.openPlanRatio!)]);
     packStyle({ ...PRESET_STYLES.office, windowsPerRoom: undefined, openPlanRatio: undefined }, single, 0);

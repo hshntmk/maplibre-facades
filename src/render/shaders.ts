@@ -132,8 +132,10 @@ uniform vec2 u_surface;         // 表面の細部: 素材の強さ (0 = OFF), �
 // 外壁の素材（material/WallMaterials.ts）: 法線 xy, ラフネス, 凹み。層 = 素材の番号
 precision highp sampler2DArray;
 uniform sampler2DArray u_materials;
-uniform vec2 u_materialPeriod[3];   // テクスチャ 1 枚が覆う壁の大きさ (m)
-uniform vec2 u_materialAverage[3];  // 1×1 のミップの値（ラフネス, 凹み）。遠景では凹みだけを使う
+uniform vec2 u_materialPeriod[5];   // テクスチャ 1 枚が覆う壁の大きさ (m)
+uniform vec2 u_materialAverage[5];  // 1×1 のミップの値（ラフネス, 凹み）
+uniform float u_materialMetal[5];   // 金属らしさ（1 = 拡散反射なし、映り込みに素材の色）
+uniform vec4 u_materialTint[5];     // 外壁の色を寄せる色と割合（コンクリート打ち放しは灰色）
 uniform float u_materialLevels;     // log2(テクスチャの 1 辺)
 
 in vec3 v_world;
@@ -331,6 +333,23 @@ void main() {
   // ---------------------------------------------------------------- 外壁
   vec3 wallAlbedo = buildingWallColor(sid, bSeed);
   if (exposure == 0) wallAlbedo *= 0.88; // 界壁は仕上げのない面
+
+  // 外壁の素材: 割合（テクセル 20 の yzw、21 の zw）に応じて建物ごとに選ぶ。界壁は仕上げのない面なので素材なし
+  int material = -1;
+  if (exposure > 0) {
+    vec4 m20 = styleTexel(sid, 20), m21 = styleTexel(sid, 21);
+    float ratios[5] = float[5](m20.y, m20.z, m20.w, m21.z, m21.w);
+    float matPick = hash12(vec2(bSeed * 83.0, 7.7)), acc = 0.0;
+    for (int i = 0; i < 5; i++) {
+      acc += ratios[i];
+      if (material < 0 && matPick < acc) material = i;
+    }
+  }
+  // 素材の色: コンクリート打ち放しなどは、スタイルの外壁色より素材の色に寄せる（明るさは建物ごとに少し変える）
+  if (material >= 0) {
+    vec4 tint = u_materialTint[material];
+    wallAlbedo = mix(wallAlbedo, tint.rgb * (0.88 + 0.24 * hash12(vec2(bSeed * 29.0, 5.1))), tint.a);
+  }
   float sunLambert = max(dot(N, u_sunDir), 0.0) * smoothstep(-0.02, 0.08, u_sunDir.z);
   vec3 ambient = mix(toLinear(u_skyHorizon), toLinear(u_skyZenith), 0.5) * 0.9 + vec3(0.012, 0.011, 0.01);
   // 夜の街灯による足元の照り返し（隙間や界壁には届かない）
@@ -503,16 +522,7 @@ void main() {
     wallAlbedo = mix(wallAlbedo, wallAlbedo * vec3(0.86, 0.84, 0.78), clamp(d * 1.6, 0.0, 1.0)) * (1.0 - d);
   }
 
-  // ---------------------------------------------------------------- 外壁の素材（タイルなど）
-  // 割合に応じて建物ごとに素材を選ぶ。界壁は仕上げのない面なので素材なし
-  vec4 t20 = styleTexel(sid, 20);
-  int material = -1;
-  float matPick = hash12(vec2(bSeed * 83.0, 7.7));
-  if (exposure > 0) {
-    if (matPick < t20.y) material = 0;
-    else if (matPick < t20.y + t20.z) material = 1;
-    else if (matPick < t20.y + t20.z + t20.w) material = 2;
-  }
+  // ---------------------------------------------------------------- 外壁の素材（凹凸とつや）
   int mi = max(material, 0);
   vec2 muv = v_uv / u_materialPeriod[mi];
   // 微分は分岐の前で求める（分岐の中では未定義）
@@ -526,7 +536,20 @@ void main() {
     // テクスチャもつやも計算せず、凹みの平均だけを掛ける（見た目はほぼ同じで、ほとんど負荷がない）
     float lod = log2(max(max(length(mgx), length(mgy)) * exp2(u_materialLevels), 1e-6));
     float near = 1.0 - smoothstep(1.5, 2.5, lod);
-    vec3 far = wallColor * mix(1.0, u_materialAverage[mi].y, min(k, 1.0));
+    // 金属は拡散反射がなく、映り込みに素材の色が付く（F0 = 素材の色）。ほかは F0 = 0.04
+    float metal = u_materialMetal[mi];
+    vec3 albedoLin = toLinear(wallAlbedo);
+    vec3 F0m = mix(vec3(0.04), albedoLin, metal);
+    float glossK = (1.0 - clamp(grime * 1.5, 0.0, 1.0)) * min(k, 1.0);
+    // 金属は拡散反射がないが、周りの建物や空のぼやけた映り込みの分として、素材の色による明るさを 3 割残す
+    float diffuseKeep = 1.0 - metal * 0.7;
+    vec3 far = wallColor * mix(1.0, u_materialAverage[mi].y, min(k, 1.0)) * diffuseKeep;
+    if (metal > 0.0) {
+      // 遠景の金属も空の映り込みを残す（近景との明るさの差を抑える）
+      float roughAvg = u_materialAverage[mi].x;
+      vec3 Ff = F0m + (1.0 - F0m) * pow(1.0 - clamp(dot(-V, N), 0.0, 1.0), 5.0);
+      far += skyRadiance(reflect(V, N)) * Ff * (1.0 - roughAvg) * glossK * metal;
+    }
     if (near > 0.0) {
       vec4 m = textureGrad(u_materials, vec3(muv, float(material)), mgx, mgy);
       vec2 n0 = m.xy * 2.0 - 1.0;
@@ -537,8 +560,8 @@ void main() {
       float sunVis = smoothstep(-0.02, 0.08, u_sunDir.z) * clamp(dot(N, u_sunDir) * 8.0, 0.0, 1.0);
       float NdotL = max(dot(Nm, u_sunDir), 0.0) * sunVis;
       vec3 amb = mix(toLinear(u_skyHorizon), toLinear(u_skyZenith), 0.5 + 0.3 * Nm.z) * 0.9 + vec3(0.012, 0.011, 0.01);
-      vec3 diffuse = toLinear(wallAlbedo) * (amb + toLinear(u_sunColor) * NdotL * 1.1 + streetWash) * cavity;
-      // つや（GGX）: 釉薬の面に太陽と空が映る。汚れたところはつやが落ちる
+      vec3 diffuse = albedoLin * (amb + toLinear(u_sunColor) * NdotL * 1.1 + streetWash) * cavity * diffuseKeep;
+      // つや（GGX）: 釉薬・磨いた石・金属の面に太陽と空が映る。汚れたところはつやが落ちる
       vec3 Vv = -V;
       vec3 H = normalize(u_sunDir + Vv);
       float a2 = pow(rough, 4.0);
@@ -546,11 +569,12 @@ void main() {
       dd = dd * dd * (a2 - 1.0) + 1.0;
       float D = a2 / (3.14159 * dd * dd);
       float LdotH = max(dot(u_sunDir, H), 0.05);
-      float F = 0.04 + 0.96 * pow(1.0 - max(dot(Vv, H), 0.0), 5.0);
-      float spec = min(D * F / (4.0 * LdotH * LdotH), 30.0) * NdotL;
-      float Fv = 0.04 + 0.96 * pow(1.0 - max(dot(Nm, Vv), 0.0), 5.0);
-      vec3 envSpec = skyRadiance(reflect(V, Nm)) * Fv * (1.0 - rough) * (1.0 - rough);
-      float gloss = (1.0 - clamp(grime * 1.5, 0.0, 1.0)) * cavity * min(k, 1.0);
+      vec3 F = F0m + (1.0 - F0m) * pow(1.0 - max(dot(Vv, H), 0.0), 5.0);
+      vec3 spec = min(D / (4.0 * LdotH * LdotH), 30.0) * F * NdotL;
+      vec3 Fv = F0m + (1.0 - F0m) * pow(1.0 - max(dot(Nm, Vv), 0.0), 5.0);
+      // 金属は粗さの影響を弱め（ぼやけた映り込みとして残す）、ほかは粗いほど映り込みを消す
+      vec3 envSpec = skyRadiance(reflect(V, Nm)) * Fv * mix((1.0 - rough) * (1.0 - rough), 1.0 - rough, metal);
+      float gloss = glossK * cavity;
       vec3 detailed = diffuse + (toLinear(u_sunColor) * spec * 1.1 + envSpec) * gloss;
       wallColor = mix(far, detailed, near);
     } else {
