@@ -4,7 +4,7 @@ import mapLibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&ur
 import { TOKYO_23_WARDS } from './tokyo23';
 import { CloudLayer } from './clouds';
 import { GSI_DEM_PROTOCOL, registerGsiDemProtocol } from './gsiTerrain';
-import { BUILDING_CATEGORIES, BuildingFacadeLayer, CATEGORY_COLORS, type BuildingStats, type DebugMode, type RGB } from 'maplibre-facades';
+import { BUILDING_CATEGORIES, BuildingFacadeLayer, CATEGORY_COLORS, clearTileCache, tileCacheUsage, type BuildingStats, type DebugMode, type RGB } from 'maplibre-facades';
 
 maplibregl.setWorkerUrl(mapLibreWorkerUrl);
 registerGsiDemProtocol();
@@ -115,6 +115,23 @@ const scheduleStats = () => {
   });
 };
 layer.on('load', scheduleStats).on('tileload', scheduleStats).on('tileunload', scheduleStats);
+// 3D Tiles: 展開したタイルはブラウザ（IndexedDB）に保存され、次からはダウンロードを省く。保存量を表示し、消せるようにする
+let usageTimer = 0;
+const showCacheUsage = () => {
+  if (usageTimer) return; // 1 秒に 1 回まで
+  usageTimer = window.setTimeout(async () => {
+    usageTimer = 0;
+    const { tiles, bytes } = await tileCacheUsage().catch(() => ({ tiles: 0, bytes: 0 }));
+    $('cache-usage').textContent = `ブラウザに保存したタイル: ${tiles} 枚（${(bytes / 1e6).toFixed(1)} MB）`;
+  }, 1000);
+};
+layer.on('tileload', showCacheUsage);
+if (sourceKind === 'geojson') $('cache-usage').parentElement!.style.display = 'none';
+else showCacheUsage();
+$('cache-clear').addEventListener('click', async () => {
+  await clearTileCache();
+  showCacheUsage();
+});
 // 開発時の確認用: タイルごとの処理時間
 const tileLog: { tileId: string; at: number; timing: unknown }[] = [];
 (window as unknown as { tileLog: typeof tileLog }).tileLog = tileLog;

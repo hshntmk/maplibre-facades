@@ -41,8 +41,9 @@ export type {
 export type { StyleRule } from './style/StyleResolver';
 
 // データ（ソース・アダプタ・共通モデル）
-export { DEFAULT_DRACO_WASM_URL } from './sources/SourceConfig';
-export type { SourceConfig, GeoJsonSourceConfig, Tiles3DSourceConfig } from './sources/SourceConfig';
+export { DEFAULT_DRACO_WASM_URL, DEFAULT_TILE_CACHE_OPTIONS } from './sources/SourceConfig';
+export type { SourceConfig, GeoJsonSourceConfig, Tiles3DSourceConfig, TileCacheOptions } from './sources/SourceConfig';
+export { clearTileCache, tileCacheUsage } from './worker/TileCache';
 export type { AdapterConfig } from './adapters/BuildingAdapter';
 export type { DeclarativeAdapterSpec } from './adapters/DeclarativeAdapter';
 export { BUILDING_CATEGORIES } from './model/BuildingRecord';

@@ -32,7 +32,7 @@ import { resolveRoofOptions, type ResolvedRoofOptions, type RoofOptions } from '
 import { resolveWeatheringOptions, type ResolvedWeatheringOptions, type WeatheringOptions } from '../weathering/WeatheringOptions';
 import { resolveSurfaceDetailOptions, type ResolvedSurfaceDetailOptions, type SurfaceDetailOptions } from '../surface/SurfaceDetailOptions';
 import { MATERIAL_TEXTURE_SIZE, MAX_WALL_MATERIALS, WALL_MATERIALS, type MaterialTexture } from '../material/WallMaterials';
-import { DEFAULT_MAX_CACHED_TILES, DEFAULT_MAX_SSE, type SourceConfig } from '../sources/SourceConfig';
+import { DEFAULT_MAX_CACHED_TILES, DEFAULT_MAX_SSE, resolveTileCacheOptions, type SourceConfig } from '../sources/SourceConfig';
 import { selectTiles } from '../sources/tiles3d/TileSelector';
 import { loadTilesets, type TileNode, type Tileset } from '../sources/tiles3d/Tileset';
 import { STYLE_TEXELS, packStyle, type FacadeStyle, type RGB } from '../style/FacadeStyle';
@@ -850,6 +850,7 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
       this.emitError(new BuildingFacadeLayerError('worker', `Worker error: ${ev.message || 'failed to load worker script'}`));
     };
     const source = this.options.source;
+    const cache = source.type === '3dtiles' ? resolveTileCacheOptions(source.cache) : undefined;
     const init: InitRequest = {
       type: 'init',
       config: {
@@ -863,6 +864,7 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
       },
       // Worker（埋め込みは Blob URL）からは相対 URL を解決できないので、ページの URL を基準に絶対 URL にして渡す
       dracoWasmUrl: source.type === '3dtiles' && source.dracoWasmUrl ? new URL(source.dracoWasmUrl, document.baseURI).href : undefined,
+      tileCache: cache ? { maxBytes: cache.maxSizeMB * 1024 * 1024, maxAgeMs: cache.maxAgeDays * 86400000 } : undefined,
     };
     worker.postMessage(init);
     worker.postMessage({ type: 'materials', size: MATERIAL_TEXTURE_SIZE } satisfies WorkerRequest);

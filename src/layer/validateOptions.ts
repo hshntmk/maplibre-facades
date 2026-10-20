@@ -103,7 +103,7 @@ export function validateLayerOptions(opts: {
   debug?: unknown;
 }): void {
   if (typeof opts.id !== 'string' || !opts.id) fail('id must be a non-empty string');
-  const source = opts.source as { type?: unknown; url?: unknown; maximumScreenSpaceError?: unknown; maxCachedTiles?: unknown; dracoWasmUrl?: unknown } | undefined;
+  const source = opts.source as { type?: unknown; url?: unknown; maximumScreenSpaceError?: unknown; maxCachedTiles?: unknown; dracoWasmUrl?: unknown; cache?: unknown } | undefined;
   if (!source || (source.type !== 'geojson' && source.type !== '3dtiles')) fail(`source.type must be 'geojson' or '3dtiles'`);
   const urls = Array.isArray(source!.url) ? source!.url : [source!.url];
   if (source!.type === 'geojson' && Array.isArray(source!.url)) fail('source.url must be a single URL for geojson');
@@ -112,6 +112,13 @@ export function validateLayerOptions(opts: {
     if (source!.maximumScreenSpaceError !== undefined) checkRange('source.maximumScreenSpaceError', source!.maximumScreenSpaceError, 1, 256);
     if (source!.maxCachedTiles !== undefined) checkRange('source.maxCachedTiles', source!.maxCachedTiles, 0, 10000);
     if (source!.dracoWasmUrl !== undefined && (typeof source!.dracoWasmUrl !== 'string' || !source!.dracoWasmUrl)) fail('source.dracoWasmUrl must be a non-empty string');
+    const cache = source!.cache as { enabled?: unknown; maxSizeMB?: unknown; maxAgeDays?: unknown } | boolean | undefined;
+    if (cache !== undefined && typeof cache !== 'boolean') {
+      if (typeof cache !== 'object' || cache === null) fail('source.cache must be a boolean or an object');
+      if (cache.enabled !== undefined && typeof cache.enabled !== 'boolean') fail('source.cache.enabled must be a boolean');
+      if (cache.maxSizeMB !== undefined) checkRange('source.cache.maxSizeMB', cache.maxSizeMB, 1, 100000);
+      if (cache.maxAgeDays !== undefined) checkRange('source.cache.maxAgeDays', cache.maxAgeDays, 0, 3650);
+    }
   }
 
   const names = Object.keys(opts.styles ?? {});

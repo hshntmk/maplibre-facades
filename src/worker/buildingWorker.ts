@@ -7,7 +7,9 @@ import { DEFAULT_DRACO_WASM_URL } from '../sources/SourceConfig';
 import { parseTileContent, usesDraco } from '../sources/tiles3d/content';
 import { getDracoModule } from '../sources/tiles3d/draco';
 import { featuresFromTile } from '../sources/tiles3d/footprints';
+import type { SourceFeature } from '../sources/SourceConfig';
 import { RecordFactory, meshRecords } from './buildPipeline';
+import { TileCache, createTileCache } from './TileCache';
 import { TileStore } from './TileStore';
 import type { PipelineConfig, WorkerRequest, WorkerResponse } from './protocol';
 
@@ -19,6 +21,7 @@ let dracoWasmUrl = DEFAULT_DRACO_WASM_URL;
 /** init で設定が不正だった（initError で 1 回だけ知らせ、以降の build / tile は応答しない） */
 let initFailed = false;
 const tiles = new TileStore();
+let tileCache: TileCache | undefined;
 
 async function fetchBytes(url: string): Promise<Uint8Array> {
   try {
@@ -39,6 +42,11 @@ self.onmessage = async (ev: MessageEvent<WorkerRequest>) => {
   const req = ev.data;
   if (req.type === 'init') {
     if (req.dracoWasmUrl) dracoWasmUrl = req.dracoWasmUrl;
+    if (req.tileCache) {
+      tileCache = createTileCache(req.tileCache);
+      // 古い形式・期限切れ・上限を超えた分を、起動時に 1 回片づける
+      tileCache?.evict().catch(() => {});
+    }
     try {
       factory = new RecordFactory(req.config);
       config = req.config;
@@ -69,7 +77,7 @@ self.onmessage = async (ev: MessageEvent<WorkerRequest>) => {
       const { records, skipped } = await factory.build(readGeoJsonSource(req.source), req.source.url);
       const t1 = performance.now();
       const { mesh, stats } = meshRecords(records, [], config, skipped);
-      const timing = { fetch: 0, decode: t1 - t0, mesh: performance.now() - t1, bytes: 0, remesh: false, neighbors: 0 };
+      const timing = { fetch: 0, decode: t1 - t0, mesh: performance.now() - t1, bytes: 0, cached: false, remesh: false, neighbors: 0 };
       post({ type: 'built', requestId: req.requestId, tileId: req.tileId, mesh, stats, timing, affected: [] }, mesh);
       return;
     }
@@ -77,18 +85,28 @@ self.onmessage = async (ev: MessageEvent<WorkerRequest>) => {
     // ---- 3D Tiles のタイル
     let entry = tiles.get(req.tileId);
     const fresh = !entry || !req.remesh;
-    const timing = { fetch: 0, decode: 0, mesh: 0, bytes: 0, remesh: !fresh, neighbors: 0 };
+    const timing = { fetch: 0, decode: 0, mesh: 0, bytes: 0, cached: false, remesh: !fresh, neighbors: 0 };
+    /** 新しくダウンロードして展開したので、応答のあとで保存するもの */
+    let toCache: { key: string; features: SourceFeature[] } | undefined;
     if (fresh) {
       const t0 = performance.now();
-      const buf = await fetchBytes(req.url);
-      const t1 = performance.now();
-      timing.fetch = t1 - t0;
-      timing.bytes = buf.byteLength;
-      const draco = usesDraco(buf) ? await getDracoModule(dracoWasmUrl) : undefined;
-      const features = featuresFromTile(parseTileContent(buf, draco, req.transform));
+      const key = tileCache ? TileCache.key(req.url, req.transform) : undefined;
+      let features = key ? await tileCache!.get(key) : undefined;
+      let t1 = performance.now();
+      if (features) {
+        timing.cached = true;
+      } else {
+        const buf = await fetchBytes(req.url);
+        t1 = performance.now();
+        timing.fetch = t1 - t0;
+        timing.bytes = buf.byteLength;
+        const draco = usesDraco(buf) ? await getDracoModule(dracoWasmUrl) : undefined;
+        features = featuresFromTile(parseTileContent(buf, draco, req.transform));
+        if (key) toCache = { key, features };
+      }
       const { records, skipped } = await factory.build(features, req.url);
       entry = tiles.set(req.tileId, records, skipped);
-      timing.decode = performance.now() - t1;
+      timing.decode = performance.now() - (timing.cached ? t0 : t1);
     }
     const t2 = performance.now();
     const neighbors = tiles.neighborsOf(req.tileId);
@@ -98,6 +116,8 @@ self.onmessage = async (ev: MessageEvent<WorkerRequest>) => {
     // 新しく届いたタイルは、隣接する読み込み済みタイルの壁面の判定を変えうる
     const affected = fresh ? tiles.affectedBy(req.tileId) : [];
     post({ type: 'built', requestId: req.requestId, tileId: req.tileId, mesh, stats, timing, affected }, mesh);
+    // 保存（JSON 化と圧縮）は表示を待たせないよう、応答のあとで行う
+    if (toCache) void tileCache?.put(toCache.key, toCache.features);
   } catch (e) {
     post({
       type: 'error',

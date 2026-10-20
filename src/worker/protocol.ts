@@ -22,6 +22,8 @@ export interface InitRequest {
   config: PipelineConfig;
   /** 3D Tiles の Draco 展開に使う wasm の URL */
   dracoWasmUrl?: string;
+  /** 展開したタイルを IndexedDB に保存するときの上限（undefined = 保存しない） */
+  tileCache?: { maxBytes: number; maxAgeMs: number };
 }
 
 /** GeoJSON を一括で読み、1 つのメッシュにする */
@@ -71,12 +73,14 @@ export interface BuildingStats {
 export interface TileTiming {
   /** ダウンロード（作り直しのときは 0） */
   fetch: number;
-  /** b3dm の解析・Draco 展開・フットプリントの復元・共通モデルへの変換 */
+  /** b3dm の解析・Draco 展開・フットプリントの復元（保存したタイルを使ったときはその読み出し）・共通モデルへの変換 */
   decode: number;
   /** 壁面の解析とメッシュ生成 */
   mesh: number;
-  /** ダウンロードしたバイト数 */
+  /** ダウンロードしたバイト数（保存したタイルを使ったときは 0） */
   bytes: number;
+  /** IndexedDB に保存したタイルを使ったか（ダウンロードと展開を省いた） */
+  cached: boolean;
   /** 隣のタイルが届いたための作り直しか */
   remesh: boolean;
   /** 壁面の解析に使った隣のタイルの建物の数 */

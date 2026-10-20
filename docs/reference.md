@@ -307,6 +307,7 @@ interface Tiles3DSourceConfig {
   maximumScreenSpaceError?: number;
   maxCachedTiles?: number;
   dracoWasmUrl?: string;
+  cache?: boolean | TileCacheOptions;
 }
 ```
 
@@ -316,6 +317,7 @@ interface Tiles3DSourceConfig {
 | `maximumScreenSpaceError` | `number` | `16` | 1–256 | 子タイルに分割する画面上の誤差（px）。 |
 | `maxCachedTiles` | `number` | `48` | 0–10000 | 描画に使っていないタイルを保持する上限数。上限を超えた分は、最後に使われた時刻が古い順に破棄される。 |
 | `dracoWasmUrl` | `string` | `DEFAULT_DRACO_WASM_URL` | — | `draco_decoder.wasm` の URL。相対 URL は `document.baseURI` を基準に解決される。 |
+| `cache` | `boolean \| TileCacheOptions` | `true` | — | 展開したタイルをブラウザに保存する。[タイルの保存](#タイルの保存) を参照。 |
 
 #### タイルの選択
 
@@ -327,6 +329,40 @@ interface Tiles3DSourceConfig {
 - 同時に読み込む暗黙的タイリングのサブツリーは最大 4 個である。
 - `refine: REPLACE` の親タイルは、可視の子タイルがすべて読み込まれるまで描画される。
 - 読み込みに失敗したタイルは、内容が空のタイルとして扱われる。
+
+#### タイルの保存
+
+展開したタイル（外形と生の属性）は、Worker がブラウザの IndexedDB（データベース名 `maplibre-facades`）に保存する。同じタイルを次に読むときは、取得と展開を行わずに保存した内容を使う。保存はページを閉じても残る。
+
+```ts
+interface TileCacheOptions {
+  enabled?: boolean;   // 既定 true
+  maxSizeMB?: number;  // 既定 200（範囲 1–100000）
+  maxAgeDays?: number; // 既定 2（範囲 0–3650）
+}
+```
+
+- 保存の単位はタイルの URL と座標変換の組である。アダプタとスタイルを通す前の値を保存するため、`adapter`・`styles`・`styleRules` を変えても保存した内容を使える。
+- 内容は JSON を gzip で圧縮して保存する。`CompressionStream` がない環境では圧縮しない。
+- 合計の大きさが `maxSizeMB` を超えた場合、最後に使われた時刻が古いタイルから削除される。
+- 保存してから `maxAgeDays` 日を過ぎたタイルは使わず、取得し直す。データの配信元の更新は検知しない。
+- 保存と読み出しに失敗した場合（IndexedDB が使えない、容量が足りないなど）、エラーにはせず、通常どおり取得する。
+- 保存は応答を送ったあとに行うため、表示を待たせない。
+- `cache: false` の場合、保存も読み出しもしない。すでに保存した内容は消えない。消すには `clearTileCache()` を呼ぶ。
+
+#### `clearTileCache(): Promise<void>`
+
+保存したタイルをすべて削除する。メインスレッドから呼べる。IndexedDB が使えない場合は何もしない。
+
+#### `tileCacheUsage(): Promise<{ tiles: number; bytes: number }>`
+
+保存しているタイルの数と、合計の大きさ（バイト）を返す。
+
+```ts
+const { tiles, bytes } = await tileCacheUsage();
+console.log(`${tiles} tiles, ${(bytes / 1e6).toFixed(1)} MB`);
+await clearTileCache();
+```
 
 #### 隣接タイル
 
@@ -987,10 +1023,11 @@ map.setPaintProperty('background', 'background-color',
 
 | 名前 | 型 | 説明 |
 |---|---|---|
-| `fetch` | `number` | 取得に要した時間。再生成と GeoJSON では `0`。 |
-| `decode` | `number` | 解析・Draco の展開・外形の復元・`BuildingRecord` への変換に要した時間。GeoJSON では取得時間を含む。 |
+| `fetch` | `number` | 取得に要した時間。再生成・保存したタイルの使用・GeoJSON では `0`。 |
+| `decode` | `number` | 解析・Draco の展開・外形の復元（保存したタイルを使った場合はその読み出し）・`BuildingRecord` への変換に要した時間。GeoJSON では取得時間を含む。Worker はタイルを並行して処理するため、待ち時間を含む。 |
 | `mesh` | `number` | 壁面の分類とメッシュ生成に要した時間。 |
-| `bytes` | `number` | 取得したバイト数。再生成と GeoJSON では `0`。 |
+| `bytes` | `number` | 取得したバイト数。再生成・保存したタイルの使用・GeoJSON では `0`。 |
+| `cached` | `boolean` | 保存したタイルを使い、取得と展開を省いた場合は `true`。 |
 | `remesh` | `boolean` | 隣接タイルの到着による再生成であれば `true`。 |
 | `neighbors` | `number` | 壁面の分類に使った隣接タイルの建物の数。 |
 
@@ -1105,6 +1142,7 @@ function getWorkerUrl(): string | URL | undefined
 | `DEFAULT_WEATHERING_OPTIONS` | `Readonly<ResolvedWeatheringOptions>` | [8.2](#82-weatheringoptions) の既定値。 |
 | `DEFAULT_SURFACE_DETAIL_OPTIONS` | `Readonly<ResolvedSurfaceDetailOptions>` | [8.3](#83-surfacedetailoptions) の既定値。 |
 | `DEFAULT_DRACO_WASM_URL` | `string` | `'https://cdn.jsdelivr.net/npm/draco3d@1.5.7/draco_decoder.wasm'` |
+| `DEFAULT_TILE_CACHE_OPTIONS` | `Readonly<Required<TileCacheOptions>>` | `{ enabled: true, maxSizeMB: 200, maxAgeDays: 2 }` |
 | `WALL_MATERIALS` | `readonly ['tile', 'concrete', 'stone', 'metal']` | 外壁の素材名。 |
 | `BUILDING_CATEGORIES` | `readonly BuildingCategory[]` | `'unknown'`, `'office'`, `'commercial'`, `'hotel'`, `'mixed_commercial'`, `'house'`, `'apartment'`, `'mixed_house'`, `'mixed_apartment'`, `'public'`, `'education_welfare'`, `'warehouse'`, `'factory'`, `'utility'`, `'other'` |
 | `CATEGORY_COLORS` | `Readonly<Record<BuildingCategory, RGB>>` | `'category'` 表示の色。 |

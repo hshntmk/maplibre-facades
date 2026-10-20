@@ -26,6 +26,20 @@ export interface Tiles3DSourceConfig {
   maxCachedTiles?: number;
   /** Draco 圧縮の展開に使う draco_decoder.wasm の URL。既定は jsDelivr の draco3d@1.5.7 */
   dracoWasmUrl?: string;
+  /**
+   * 展開したタイル（フットプリントと属性）をブラウザの IndexedDB に保存し、次からはダウンロードと展開を省く（既定 ON）。
+   * true / false か、上限を指定するオブジェクト
+   */
+  cache?: boolean | TileCacheOptions;
+}
+
+export interface TileCacheOptions {
+  /** 既定 true */
+  enabled?: boolean;
+  /** 保存する合計の大きさの上限 (MB)。超えたら最後に使った時刻が古いものから捨てる。既定 200 */
+  maxSizeMB?: number;
+  /** 保存してから使う日数。過ぎたらダウンロードし直す。既定 2 */
+  maxAgeDays?: number;
 }
 
 export type SourceConfig = GeoJsonSourceConfig | Tiles3DSourceConfig;
@@ -33,3 +47,11 @@ export type SourceConfig = GeoJsonSourceConfig | Tiles3DSourceConfig;
 export const DEFAULT_DRACO_WASM_URL = 'https://cdn.jsdelivr.net/npm/draco3d@1.5.7/draco_decoder.wasm';
 export const DEFAULT_MAX_SSE = 16;
 export const DEFAULT_MAX_CACHED_TILES = 48;
+export const DEFAULT_TILE_CACHE_OPTIONS: Readonly<Required<TileCacheOptions>> = Object.freeze({ enabled: true, maxSizeMB: 200, maxAgeDays: 2 });
+
+/** cache オプションを既定値で補う。無効なら undefined */
+export function resolveTileCacheOptions(cache: boolean | TileCacheOptions | undefined): Required<TileCacheOptions> | undefined {
+  const o = cache === undefined || cache === true ? {} : cache === false ? { enabled: false } : cache;
+  const resolved = { ...DEFAULT_TILE_CACHE_OPTIONS, ...o };
+  return resolved.enabled ? resolved : undefined;
+}
