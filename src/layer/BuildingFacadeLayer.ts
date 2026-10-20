@@ -38,6 +38,8 @@ import { loadTilesets, type TileNode, type Tileset } from '../sources/tiles3d/Ti
 import { STYLE_TEXELS, packStyle, type FacadeStyle, type RGB } from '../style/FacadeStyle';
 import { DEFAULT_STYLE_RULES, PRESET_STYLES } from '../style/presets';
 import type { StyleRule } from '../style/StyleResolver';
+import { computeFog, NO_FOG, type FogUniforms } from '../terrain/Fog';
+import { createTileGround, deleteTileGround, sampleTileGround, terrainElevation, type TileGround } from '../terrain/Ground';
 import { createBuildingWorker } from '../worker/createWorker';
 import type { BuildingStats, InitRequest, TileTiming, WorkerRequest, WorkerResponse } from '../worker/protocol';
 import { Evented } from './Evented';
@@ -79,6 +81,17 @@ export interface BuildingFacadeLayerOptions {
    * 素材のテクスチャは初期化時に手続き的に作るので、追加のダウンロードはない
    */
   surfaceDetail?: boolean | SurfaceDetailOptions;
+  /**
+   * MapLibre の地形（`map.setTerrain()`）があるとき、建物を地面の標高に載せる（既定 true）。
+   * 標高は建物ごとに 1 つ（フットプリントの中心と四隅のうち一番低い所）で、斜面でも建物は傾けない。
+   * 地形の読み込みや視点の変化で描かれる地形が変わったら、標高を引き直す
+   */
+  terrain?: boolean;
+  /**
+   * MapLibre の sky の霞（`fog-color`・`horizon-color`・`fog-ground-blend`・`horizon-fog-blend`）を建物にもかける（既定 true）。
+   * MapLibre が地面に霞をかけるとき（地形あり・sky あり・メルカトル・ピッチ 60° 以上）だけ、地面と同じ式でかける
+   */
+  fog?: boolean;
   debug?: DebugMode;
   /** ワーカーの URL。省略時はバンドル内に埋め込んだワーカーを使う（setWorkerUrl() で全体の既定も変えられる） */
   workerUrl?: string | URL;
@@ -166,6 +179,8 @@ interface TileGpu {
   roofs: MeshBuffers;
   equipment: MeshBuffers & { instanceCount: number };
   lights: MeshBuffers;
+  /** 建物ごとの地形の標高 */
+  ground: TileGround;
   /** 描画のたびに計算する、局所座標 → クリップの行列とカメラ位置 */
   matrix32: Float32Array;
   eye: [number, number, number];
@@ -195,6 +210,10 @@ const MAX_REMESH_IN_FLIGHT = 1;
 /** 同時に読むサブツリー（暗黙的タイリング）の数。小さなファイルなので多めにする */
 const MAX_SUBTREES_IN_FLIGHT = 4;
 const GEOJSON_TILE = 'geojson';
+/** 地形の標高を引く時間の上限（1 フレームあたり ms）。超えたら続きは次のフレームで引く */
+const GROUND_BUDGET_MS = 4;
+/** 地形のタイルが届いたとき、まとめて引き直すまでの待ち時間 (ms) */
+const TERRAIN_SETTLE_MS = 150;
 
 /**
  * 建物の窓を手続き的に描画する MapLibre GL JS のカスタムレイヤー。
@@ -222,6 +241,13 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
   private _weathering: ResolvedWeatheringOptions;
   private _surfaceDetail: ResolvedSurfaceDetailOptions;
   private debug: DebugMode;
+  private readonly followTerrain: boolean;
+  private _fog: boolean;
+  /** 地形の版。地形が変わるたびに増やし、タイルの標高が古ければ引き直す */
+  private terrainVersion = 0;
+  private terrainTimer?: ReturnType<typeof setTimeout>;
+  private readonly fogScratch = createMat4();
+  private readonly mapListeners: [string, (e: unknown) => void][] = [];
 
   private map?: MapLibreMap;
   private gl?: WebGL2RenderingContext;
@@ -262,6 +288,8 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
     this._weathering = resolveWeatheringOptions(options.weathering);
     this._surfaceDetail = resolveSurfaceDetailOptions(options.surfaceDetail);
     this.debug = options.debug ?? 'none';
+    this.followTerrain = options.terrain ?? true;
+    this._fog = options.fog ?? true;
   }
 
   // ---------------------------------------------------------------- state
@@ -321,6 +349,11 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
   }
 
   /** 現在の時刻から計算した照明（背景地図や空の色を合わせるのに使う） */
+  /** MapLibre の sky の霞を建物にもかけるか */
+  get fog(): boolean {
+    return this._fog;
+  }
+
   get lightingState(): Readonly<LightingState> {
     return this.lighting;
   }
@@ -389,6 +422,14 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
   }
 
   /** ガラスの反射の強さ（0–3）。各スタイルの reflectivity に掛ける倍率 */
+  /** MapLibre の sky の霞を建物にもかけるか（地形・sky・ピッチの条件は options.fog を参照） */
+  setFog(enabled: boolean): this {
+    if (typeof enabled !== 'boolean') throw new BuildingFacadeLayerError('options', `fog must be a boolean (got ${enabled})`);
+    this._fog = enabled;
+    this.map?.triggerRepaint();
+    return this;
+  }
+
   setReflection(strength: number): this {
     if (!Number.isFinite(strength) || strength < 0 || strength > 3) {
       throw new BuildingFacadeLayerError('options', `reflection must be a number between 0 and 3 (got ${strength})`);
@@ -434,6 +475,22 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
     }
     if (!this.startWorker()) return;
 
+    // 地形が変わったら建物の標高を引き直す: 地形の設定・誇張の変更、DEM タイルの到着、視点の移動（描かれる地形の詳細度が変わる）
+    if (this.followTerrain) {
+      const on = (type: string, fn: (e: unknown) => void) => {
+        map.on(type as 'terrain', fn);
+        this.mapListeners.push([type, fn]);
+      };
+      on('terrain', () => this.invalidateTerrain(0));
+      on('sourcedata', (e) => {
+        const ev = e as { sourceId?: string; tile?: unknown };
+        if (ev.tile && ev.sourceId === map.getTerrain()?.source) this.invalidateTerrain(TERRAIN_SETTLE_MS);
+      });
+      on('moveend', () => {
+        if (map.getTerrain()) this.invalidateTerrain(TERRAIN_SETTLE_MS);
+      });
+    }
+
     const source = this.options.source;
     const resolve = (u: string) => new URL(u, document.baseURI).href;
     const toError = (e: unknown) => (e instanceof BuildingFacadeLayerError ? e : new BuildingFacadeLayerError('source', String(e), { cause: e }));
@@ -456,8 +513,11 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
     }
   }
 
-  onRemove(_map: MapLibreMap, gl: WebGL2RenderingContext): void {
+  onRemove(map: MapLibreMap, gl: WebGL2RenderingContext): void {
     this.generation++;
+    for (const [type, fn] of this.mapListeners) map.off(type as 'terrain', fn);
+    this.mapListeners.length = 0;
+    clearTimeout(this.terrainTimer);
     this.worker?.terminate();
     this.worker = undefined;
     for (const e of this.tiles.values()) if (e.gpu) deleteTileGpu(gl, e.gpu);
@@ -486,6 +546,8 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
 
     const tiles = this.visibleEntries().map((e) => e.gpu!);
     if (!tiles.length) return;
+    this.updateGround(gl, tiles);
+    const fog = this._fog && this.map ? computeFog(this.map, options, this.fogScratch) : NO_FOG;
 
     // タイルごとに: 局所座標 (m) → メルカトル → クリップ。倍精度で合成してから float32 に落とす（RTC）
     for (const t of tiles) {
@@ -528,12 +590,20 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
       gl.uniform3fv(u.u_debugColors, debugColors);
       gl.uniform1f(u.u_parapetHeight, effects && roof.parapet.enabled ? roof.parapet.height : 0);
       gl.uniform1f(u.u_effects, effects ? 1 : 0);
+      gl.uniform1i(u.u_ground, 2);
+      gl.uniform2fv(u.u_fogRange, fog.range);
+      gl.uniform4fv(u.u_fogColor, fog.color);
+      gl.uniform4fv(u.u_fogHorizon, fog.horizon);
+      gl.uniform1f(u.u_fogOpacity, fog.opacity);
     };
     const effects = this._effects;
     const forEachTile = (p: Program, draw: (t: TileGpu) => void) => {
       for (const t of tiles) {
         gl.uniformMatrix4fv(p.uniforms.u_matrix, false, t.matrix32);
         gl.uniform3fv(p.uniforms.u_eye, t.eye);
+        gl.activeTexture(gl.TEXTURE2);
+        gl.bindTexture(gl.TEXTURE_2D, t.ground.texture);
+        gl.activeTexture(gl.TEXTURE0);
         draw(t);
       }
     };
@@ -621,6 +691,36 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
   }
 
   // ---------------------------------------------------------------- internals
+
+  /** 地形が変わった。delay ms 待ってから（その間の変化はまとめて）標高を引き直す */
+  private invalidateTerrain(delay: number): void {
+    if (this.terrainTimer !== undefined) {
+      if (delay > 0) return; // すでに予約済み
+      clearTimeout(this.terrainTimer);
+    }
+    const bump = () => {
+      this.terrainTimer = undefined;
+      this.terrainVersion++;
+      this.map?.triggerRepaint();
+    };
+    if (delay > 0) this.terrainTimer = setTimeout(bump, delay);
+    else bump();
+  }
+
+  /** 描くタイルの標高が古ければ引き直す。時間を区切り、終わらなければ次のフレームで続ける */
+  private updateGround(gl: WebGL2RenderingContext, tiles: TileGpu[]): void {
+    const version = this.terrainVersion;
+    const stale = tiles.filter((t) => t.ground.version !== version);
+    if (!stale.length || !this.map) return;
+    const elevation = this.followTerrain ? terrainElevation(this.map) : undefined;
+    const deadline = performance.now() + GROUND_BUDGET_MS;
+    for (const t of stale) {
+      if (!sampleTileGround(gl, t.ground, version, elevation, deadline)) {
+        this.map.triggerRepaint();
+        break;
+      }
+    }
+  }
 
   /** 描くタイル（GeoJSON は全体の 1 つ） */
   private visibleEntries(): TileEntry[] {
@@ -828,6 +928,7 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
       roofs: createMesh(gl, mesh.roofs, mesh.roofIndices, ROOF_STRIDE, ROOF_ATTRIBUTES),
       equipment: createInstancedMesh(gl, unitBox(), { data: mesh.equipment, stride: EQUIPMENT_STRIDE, attributes: EQUIPMENT_ATTRIBUTES }),
       lights: createPointMesh(gl, mesh.lights, LIGHT_STRIDE, LIGHT_ATTRIBUTES),
+      ground: createTileGround(gl, mesh.grounds, mesh.reference),
       matrix32: new Float32Array(16),
       eye: [0, 0, 0],
     };
@@ -928,6 +1029,7 @@ function uploadMaterials(gl: WebGL2RenderingContext, mat: MaterialGpu, textures:
 
 function deleteTileGpu(gl: WebGL2RenderingContext, t: TileGpu): void {
   for (const mesh of [t.walls, t.roofs, t.equipment, t.lights]) deleteMesh(gl, mesh);
+  deleteTileGround(gl, t.ground);
 }
 
 /** タイルごとの統計を合計する */

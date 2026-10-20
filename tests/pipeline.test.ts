@@ -3,7 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { createAdapter } from '../src/adapters/registry';
 import { enrich } from '../src/enrich/Enricher';
 import type { FootprintGeometry } from '../src/model/BuildingRecord';
-import { FacadeMeshBuilder, WALL_STRIDE, createReference } from '../src/mesh/FacadeMeshBuilder';
+import { FacadeMeshBuilder, ROOF_STRIDE, WALL_STRIDE, createReference } from '../src/mesh/FacadeMeshBuilder';
+import { GROUND_STRIDE } from '../src/mesh/layout';
 import { DEFAULT_STYLE_RULES, PRESET_STYLES } from '../src/style/presets';
 import { StyleResolver } from '../src/style/StyleResolver';
 import { runBuildPipeline } from '../src/worker/buildPipeline';
@@ -122,6 +123,31 @@ describe('FacadeMeshBuilder', () => {
     // 壁の長さ ≈ 0.0001° × 経度方向の距離
     expect(mesh.walls[7]).toBeGreaterThan(8.5);
     expect(mesh.walls[7]).toBeLessThan(9.5);
+  });
+
+  it('numbers buildings for terrain elevation and gives their bounding boxes', () => {
+    const a = enrich(plateau.toRecord({ gml_id: 'g1', 'bldg:measuredHeight': 20 }, square, ctx)!);
+    const shifted: FootprintGeometry = { kind: 'footprint', polygons: [square.polygons[0].map((r) => r.map(([x, y]) => [x + 0.001, y] as [number, number]))] };
+    const b2 = enrich(plateau.toRecord({ gml_id: 'g2', 'bldg:measuredHeight': 30 }, shifted, ctx)!);
+    const obstacle = enrich(plateau.toRecord({ gml_id: 'g3', 'bldg:measuredHeight': 30 }, shifted, ctx)!);
+    const b = new FacadeMeshBuilder(createReference(139.77, 35.69));
+    b.add(a, 0);
+    b.add(obstacle, 0, { obstacle: true }); // 隣のタイルの建物は番号を使わない
+    b.add(b2, 0);
+    const mesh = b.build();
+    expect(mesh.grounds.length).toBe(2 * GROUND_STRIDE);
+    // 1 つ目は基準点を南西の角とする約 9m × 11m の矩形
+    const [minX, minY, maxX, maxY] = mesh.grounds;
+    expect(minX).toBeCloseTo(0, 3);
+    expect(minY).toBeCloseTo(0, 3);
+    expect(maxX).toBeGreaterThan(8.5);
+    expect(maxY).toBeGreaterThan(10.5);
+    // 頂点の最後の値が建物の番号
+    const wallSlots = new Set<number>();
+    for (let i = WALL_STRIDE - 1; i < mesh.walls.length; i += WALL_STRIDE) wallSlots.add(mesh.walls[i]);
+    expect([...wallSlots].sort()).toEqual([0, 1]);
+    expect(mesh.roofs[ROOF_STRIDE - 1]).toBe(0);
+    expect(mesh.roofs[mesh.roofs.length - 1]).toBe(1);
   });
 });
 

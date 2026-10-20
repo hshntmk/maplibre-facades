@@ -2,7 +2,7 @@ import earcut from 'earcut';
 import { mercatorX, mercatorY, meterInMercator } from '../math/mercator';
 import { categoryIndex, type BuildingRecord, type LngLatRing } from '../model/BuildingRecord';
 import { DEFAULT_EXPOSURE_THRESHOLDS, analyzeFacades, exposureOf, type BuildingRings, type ExposureThresholds, type Point } from './FacadeAnalyzer';
-import { ROOF_STRIDE, WALL_STRIDE, type FacadeLengths, type FacadeMesh, type MeshReference } from './layout';
+import { GROUND_STRIDE, ROOF_STRIDE, WALL_STRIDE, type FacadeLengths, type FacadeMesh, type MeshReference } from './layout';
 import { EQUIPMENT_TYPES, generateRooftop } from './RooftopGenerator';
 
 // フットプリントから壁（窓はシェーダで描くので 1 セグメント = 1 四角形）と屋根のメッシュを作る。
@@ -103,6 +103,7 @@ export class FacadeMeshBuilder {
     const roofIdx = new GrowableU32();
     const equipment = new GrowableF32();
     const lights = new GrowableF32();
+    const grounds = new GrowableF32();
     const lengths: FacadeLengths = { front: 0, side: 0, party: 0, sunSide: 0 };
 
     const facades = analyzeFacades(
@@ -113,6 +114,18 @@ export class FacadeMeshBuilder {
 
     this.pending.forEach(({ record, styleIndex, polygons, obstacle }, bi) => {
       if (obstacle) return;
+      // 地形の標高は建物ごとに 1 つ（斜面でも建物は傾けない）。引く位置として外接矩形を渡す
+      const ground = grounds.length / GROUND_STRIDE;
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const rings of polygons) {
+        for (const [x, y] of rings[0]) {
+          minX = Math.min(minX, x);
+          minY = Math.min(minY, y);
+          maxX = Math.max(maxX, x);
+          maxY = Math.max(maxY, y);
+        }
+      }
+      grounds.push(minX, minY, maxX, maxY);
       const seed = hashId(record.id);
       const cat = categoryIndex(record.category);
       const fh = record.floorHeight ?? 3.2;
@@ -132,10 +145,10 @@ export class FacadeMeshBuilder {
         seed: hashId(`${record.id}:roof`),
       });
       for (const e of rooftop.equipment) {
-        equipment.push(e.x, e.y, top, e.w, e.d, e.h, e.angle, EQUIPMENT_TYPES.indexOf(e.type), e.rank, styleIndex, seed, height);
+        equipment.push(e.x, e.y, top, e.w, e.d, e.h, e.angle, EQUIPMENT_TYPES.indexOf(e.type), e.rank, styleIndex, seed, height, ground);
       }
       const phase = hashId(`${record.id}:light`);
-      for (const [x, y] of rooftop.lights) lights.push(x, y, top, height, phase);
+      for (const [x, y] of rooftop.lights) lights.push(x, y, top, height, phase, ground);
 
       polygons.forEach((rings, pi) => {
         // ---- 壁: リングの各辺を 1 枚の四角形に。u は連続面に沿った距離
@@ -151,7 +164,7 @@ export class FacadeMeshBuilder {
             const runSeed = hashId(`${record.id}:run${f.runId}`);
             const base = walls.length / WALL_STRIDE;
             const v = (x: number, y: number, z: number, u: number) =>
-              walls.push(x, y, z, u, z - bottom, tx, ty, f.runLength, runSeed, styleIndex, seed, fh, cat, top - bottom, f.clearance, f.sunSide ? 1 : 0, f.coverHeight - bottom, age);
+              walls.push(x, y, z, u, z - bottom, tx, ty, f.runLength, runSeed, styleIndex, seed, fh, cat, top - bottom, f.clearance, f.sunSide ? 1 : 0, f.coverHeight - bottom, age, ground);
             v(x0, y0, bottom, f.runOffset);
             v(x1, y1, bottom, f.runOffset + len);
             v(x1, y1, top, f.runOffset + len);
@@ -173,7 +186,7 @@ export class FacadeMeshBuilder {
         const tris = earcut(flat, holes, 2);
         const base = roofs.length / ROOF_STRIDE;
         for (let i = 0; i < flat.length; i += 2) {
-          roofs.push(flat[i], flat[i + 1], top, styleIndex, seed, cat, rooftop.axisAngle, rooftop.roofArea, height);
+          roofs.push(flat[i], flat[i + 1], top, styleIndex, seed, cat, rooftop.axisAngle, rooftop.roofArea, height, ground);
         }
         for (const t of tris) roofIdx.push(base + t);
       });
@@ -187,6 +200,7 @@ export class FacadeMeshBuilder {
       roofIndices: roofIdx.result(),
       equipment: equipment.result(),
       lights: lights.result(),
+      grounds: grounds.result(),
       facadeLengths: lengths,
     };
   }

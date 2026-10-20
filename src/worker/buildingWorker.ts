@@ -31,7 +31,7 @@ async function fetchBytes(url: string): Promise<Uint8Array> {
 }
 
 function post(msg: WorkerResponse, mesh?: FacadeMesh) {
-  if (mesh) self.postMessage(msg, [mesh.walls.buffer, mesh.wallIndices.buffer, mesh.roofs.buffer, mesh.roofIndices.buffer, mesh.equipment.buffer, mesh.lights.buffer]);
+  if (mesh) self.postMessage(msg, [mesh.walls.buffer, mesh.wallIndices.buffer, mesh.roofs.buffer, mesh.roofIndices.buffer, mesh.equipment.buffer, mesh.lights.buffer, mesh.grounds.buffer]);
   else self.postMessage(msg);
 }
 

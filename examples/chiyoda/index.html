@@ -58,6 +58,17 @@
         <input id="roof-density" type="range" min="0" max="1" step="0.05" value="0.7" />
         <label class="check"><input id="roof-lights" type="checkbox" checked /> 航空障害灯（60m 以上）</label>
         <label class="check"><input id="roof-blink" type="checkbox" checked /> 点滅</label>
+        <h2 style="margin-top:10px">地形・大気</h2>
+        <label class="check"><input id="terrain" type="checkbox" /> 地形（地理院の標高）</label>
+        <label class="row"><span>高さの誇張</span><output id="terrain-exaggeration-label">1.0 倍</output></label>
+        <input id="terrain-exaggeration" type="range" min="1" max="5" step="0.5" value="1" />
+        <label class="check"><input id="haze" type="checkbox" /> 霞（MapLibre の sky。地図を 60° 以上傾けると効く）</label>
+        <label class="row"><span>霞の範囲</span><output id="haze-amount-label">0.50</output></label>
+        <input id="haze-amount" type="range" min="0" max="1" step="0.05" value="0.5" />
+        <label class="check"><input id="clouds" type="checkbox" /> 雲（空の雲・地面の影）</label>
+        <label class="row"><span>雲量</span><output id="cloud-coverage-label">0.45</output></label>
+        <input id="cloud-coverage" type="range" min="0" max="1" step="0.05" value="0.45" />
+        <label class="check"><input id="cloud-animate" type="checkbox" checked /> 雲を動かす</label>
         <div class="row">
           <select id="debug">
             <option value="none">通常</option>

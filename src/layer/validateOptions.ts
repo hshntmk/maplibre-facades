@@ -98,6 +98,8 @@ export function validateLayerOptions(opts: {
   reflection?: unknown;
   effects?: unknown;
   interior?: unknown;
+  terrain?: unknown;
+  fog?: unknown;
   debug?: unknown;
 }): void {
   if (typeof opts.id !== 'string' || !opts.id) fail('id must be a non-empty string');
@@ -127,5 +129,7 @@ export function validateLayerOptions(opts: {
   if (opts.reflection !== undefined) checkRange('reflection', opts.reflection, 0, 3);
   if (opts.effects !== undefined && typeof opts.effects !== 'boolean') fail('effects must be a boolean');
   if (opts.interior !== undefined && typeof opts.interior !== 'boolean') fail('interior must be a boolean');
+  if (opts.terrain !== undefined && typeof opts.terrain !== 'boolean') fail('terrain must be a boolean');
+  if (opts.fog !== undefined && typeof opts.fog !== 'boolean') fail('fog must be a boolean');
   if (opts.debug !== undefined && !(DEBUG_MODES as readonly unknown[]).includes(opts.debug)) fail(`unknown debug mode: ${opts.debug}`);
 }

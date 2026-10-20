@@ -2,9 +2,12 @@ import * as maplibregl from 'maplibre-gl';
 // maplibre-gl v6 は自身の Worker を import.meta.url 基準で探すが、本番ビルドではそのファイルが出力されないので、Vite に Worker として取り込ませて URL を渡す
 import mapLibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import { TOKYO_23_WARDS } from './tokyo23';
+import { CloudLayer } from './clouds';
+import { GSI_DEM_PROTOCOL, registerGsiDemProtocol } from './gsiTerrain';
 import { BUILDING_CATEGORIES, BuildingFacadeLayer, CATEGORY_COLORS, type BuildingStats, type DebugMode, type RGB } from 'maplibre-facades';
 
 maplibregl.setWorkerUrl(mapLibreWorkerUrl);
+registerGsiDemProtocol();
 
 const CATEGORY_LABELS: Record<string, string> = {
   unknown: '不明',
@@ -41,6 +44,8 @@ const map = new maplibregl.Map({
   container: 'map',
   style: {
     version: 8,
+    // 時刻に合わせたペイントの変更はすぐに反映する（地形に貼るテクスチャを描き直すときに、変化の途中の色が残らないように）
+    transition: { duration: 0, delay: 0 },
     sources: {
       gsi: {
         type: 'raster',
@@ -50,7 +55,17 @@ const map = new maplibregl.Map({
         maxzoom: 18,
         attribution: '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank">地理院タイル（全国最新写真）</a>',
       },
+      // 地理院タイル「標高タイル（基盤地図情報 数値標高モデル）」。読み込み時に Terrarium 形式へ変換する（gsiTerrain.ts）
+      'gsi-dem': {
+        type: 'raster-dem',
+        tiles: [`${GSI_DEM_PROTOCOL}://cyberjapandata.gsi.go.jp/xyz/dem_png/{z}/{x}/{y}.png`],
+        tileSize: 256,
+        maxzoom: 14,
+        encoding: 'terrarium',
+        attribution: '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank">地理院タイル（標高タイル）</a>',
+      },
     },
+    ...($<HTMLInputElement>('terrain').checked ? { terrain: { source: 'gsi-dem', exaggeration: Number($<HTMLInputElement>('terrain-exaggeration').value) } } : {}),
     layers: [
       { id: 'background', type: 'background', paint: { 'background-color': '#0b0d12' } },
       { id: 'gsi', type: 'raster', source: 'gsi' },
@@ -111,7 +126,22 @@ layer.on('error', ({ error }) => {
 (window as unknown as { layer: BuildingFacadeLayer; map: maplibregl.Map }).layer = layer;
 (window as unknown as { layer: BuildingFacadeLayer; map: maplibregl.Map }).map = map;
 
+// 霞と雲（デモ専用のカスタムレイヤー。航空写真と空にだけかかり、建物にはかからない）
+const clouds = new CloudLayer('clouds', () => layer.lightingState, {
+  enabled: $<HTMLInputElement>('clouds').checked,
+  coverage: Number($<HTMLInputElement>('cloud-coverage').value),
+  animate: $<HTMLInputElement>('cloud-animate').checked,
+});
+(window as unknown as { clouds: CloudLayer }).clouds = clouds;
+
 map.on('load', () => {
+  // 雲は演出なので、作れない環境でも建物は表示する
+  try {
+    map.addLayer(clouds);
+  } catch (e) {
+    console.warn('雲のレイヤーを追加できませんでした', e);
+    if (map.getLayer(clouds.id)) map.removeLayer(clouds.id);
+  }
   map.addLayer(layer);
   applyTimeOfDay(layer.timeOfDay);
 });
@@ -120,6 +150,8 @@ map.on('load', () => {
 
 const hex = (c: RGB) =>
   `#${c.map((v) => Math.round(Math.min(1, Math.max(0, v)) * 255).toString(16).padStart(2, '0')).join('')}`;
+
+let lastRasterBrightness = NaN;
 
 function applyTimeOfDay(hour: number): void {
   layer.setTimeOfDay(hour);
@@ -130,16 +162,24 @@ function applyTimeOfDay(hour: number): void {
   if (!map.isStyleLoaded()) return;
   // 背景の地理院タイルを夜は暗く
   // 航空写真は昼はそのまま、夜は暗く彩度を落とす
-  map.setPaintProperty('gsi', 'raster-brightness-max', 1 - 0.85 * L.night - 0.15 * L.twilight);
+  const brightness = 1 - 0.85 * L.night - 0.15 * L.twilight;
+  map.setPaintProperty('gsi', 'raster-brightness-max', brightness);
   map.setPaintProperty('gsi', 'raster-saturation', -0.6 * L.night);
   map.setPaintProperty('gsi', 'raster-contrast', 0.1 * L.night);
+  // 地形があるとき、MapLibre は地図をタイルごとのテクスチャに描いて地形に貼るが、ペイントの変更ではそれを描き直さない。
+  // 明るさが変わったらテクスチャを捨てて描き直させる（MapLibre の内部の API。時間を進めている間は変化が小さいうちは描き直さない）
+  if (Math.abs(brightness - lastRasterBrightness) > 0.01) {
+    lastRasterBrightness = brightness;
+    (map as unknown as { terrain?: { tileManager?: { releaseAllRTT?: () => void } } }).terrain?.tileManager?.releaseAllRTT?.();
+  }
   map.setSky({
     'sky-color': hex(L.skyZenith),
     'horizon-color': hex(L.skyHorizon),
     'fog-color': hex(L.skyHorizon),
     'sky-horizon-blend': 0.6,
     'horizon-fog-blend': 0.8,
-    'fog-ground-blend': 0.9,
+    // MapLibre の霞（地形があるときだけ、ピッチ 60° 以上で地面にかかる）。fog-ground-blend より奥が霞む。建物にも同じ霞がかかる
+    'fog-ground-blend': $<HTMLInputElement>('haze').checked ? 1 - Number($<HTMLInputElement>('haze-amount').value) : 1,
   });
 }
 
@@ -204,6 +244,28 @@ reflectionInput.addEventListener('input', () => {
   layer.setReflection(Number(reflectionInput.value));
   $('reflection-label').textContent = Number(reflectionInput.value).toFixed(1);
 });
+// 地形・霞・雲
+const exaggeration = $<HTMLInputElement>('terrain-exaggeration');
+const updateTerrain = () => {
+  map.setTerrain(checked('terrain') ? { source: 'gsi-dem', exaggeration: Number(exaggeration.value) } : null);
+  $('terrain-exaggeration-label').textContent = `${Number(exaggeration.value).toFixed(1)} 倍`;
+};
+$('terrain').addEventListener('change', updateTerrain);
+exaggeration.addEventListener('input', updateTerrain);
+const hazeAmount = $<HTMLInputElement>('haze-amount');
+const updateHaze = () => {
+  $('haze-amount-label').textContent = Number(hazeAmount.value).toFixed(2);
+  applyTimeOfDay(Number(hourInput.value));
+};
+$('haze').addEventListener('change', updateHaze);
+hazeAmount.addEventListener('input', updateHaze);
+const cloudCoverage = $<HTMLInputElement>('cloud-coverage');
+const updateClouds = () => {
+  clouds.setOptions({ enabled: checked('clouds'), coverage: Number(cloudCoverage.value), animate: checked('cloud-animate') });
+  $('cloud-coverage-label').textContent = Number(cloudCoverage.value).toFixed(2);
+};
+for (const id of ['clouds', 'cloud-animate']) $(id).addEventListener('change', updateClouds);
+cloudCoverage.addEventListener('input', updateClouds);
 $<HTMLSelectElement>('debug').addEventListener('change', (e) => {
   layer.setDebugMode((e.target as HTMLSelectElement).value as DebugMode);
   if (layer.stats) renderStats(layer.stats);

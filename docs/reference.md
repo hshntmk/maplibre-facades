@@ -38,6 +38,7 @@
   - 8.2 `WeatheringOptions`
   - 8.3 `SurfaceDetailOptions`
   - 8.4 `DebugMode`
+  - 8.5 地形と霞
 - 9\. 時刻と照明
   - 9.1 `computeLighting()`
   - 9.2 `LightingState`
@@ -138,6 +139,8 @@ new BuildingFacadeLayer(options: BuildingFacadeLayerOptions)
 | `roof` | `RoofOptions` | `DEFAULT_ROOF_OPTIONS` | 屋上の描画。[8.1](#81-roofoptions) を参照。 |
 | `weathering` | `boolean \| WeatheringOptions` | `DEFAULT_WEATHERING_OPTIONS` | 外壁の汚れ。[8.2](#82-weatheringoptions) を参照。 |
 | `surfaceDetail` | `boolean \| SurfaceDetailOptions` | `DEFAULT_SURFACE_DETAIL_OPTIONS` | 外壁の素材とガラスの歪み。[8.3](#83-surfacedetailoptions) を参照。 |
+| `terrain` | `boolean` | `true` | MapLibre の地形があるとき、建物を地面の標高に載せる。[8.5](#85-地形と霞) を参照。 |
+| `fog` | `boolean` | `true` | MapLibre の sky の霞を建物にもかける。[8.5](#85-地形と霞) を参照。 |
 | `debug` | `DebugMode` | `'none'` | 色分け表示。[8.4](#84-debugmode) を参照。 |
 | `workerUrl` | `string \| URL` | `undefined` | Worker のスクリプトの URL。[12](#12-worker) を参照。 |
 
@@ -160,6 +163,7 @@ new BuildingFacadeLayer(options: BuildingFacadeLayerOptions)
 | `roof` | `Readonly<ResolvedRoofOptions>` | 既定値を補完した屋上の設定。 |
 | `weathering` | `Readonly<ResolvedWeatheringOptions>` | 既定値を補完した汚れの設定。 |
 | `surfaceDetail` | `Readonly<ResolvedSurfaceDetailOptions>` | 既定値を補完した表面の細部の設定。 |
+| `fog` | `boolean` | 建物に霞をかけるかどうか。 |
 | `lightingState` | `Readonly<LightingState>` | 現在の時刻から計算した照明。[9.2](#92-lightingstate) を参照。 |
 
 ### 2.4 メソッド
@@ -185,6 +189,10 @@ layer.setTimeOfDay(18.5);
 #### `setReflection(strength: number): this`
 
 反射の係数を設定する。`strength` が 0–3 の範囲外の場合、例外を送出する。
+
+#### `setFog(enabled: boolean): this`
+
+建物に霞をかけるかどうかを設定する。霞がかかる条件は [8.5](#85-地形と霞) を参照。`enabled` が真偽値でない場合、例外を送出する。
 
 #### `setRoof(options: RoofOptions): this`
 
@@ -883,6 +891,30 @@ type DebugMode = 'none' | 'category' | 'style' | 'facade';
 | `'style'` | スタイルごとの色。 |
 | `'facade'` | 壁面の分類（界壁・側壁・正面・日照面）ごとの色と、配置された窓。色は `FACADE_COLORS`。 |
 
+### 8.5 地形と霞
+
+**地形**（`terrain`）: 地図に地形（`map.setTerrain()`）が設定されている場合、建物は地面の標高まで持ち上げて描かれる。
+
+- 標高は建物ごとに 1 つである。フットプリントの外接矩形の中心と、内側に 25% 寄せた四隅を `map.queryTerrainElevation()` で調べ、最も低い値を使う。外接矩形の対角線が 15 m 未満の建物は中心だけを調べる。
+- 斜面でも建物は傾かない。坂の上側は地面に埋まる。
+- 標高には地形の誇張（`exaggeration`）が含まれる。
+- 次の場合に標高を調べ直す: 地形の設定の変更（`terrain` イベント）、地形のタイルの到着、視点の移動の終了（`moveend`）。調べ直しは 1 フレームあたり 4 ms までで、終わらない分は次のフレームで続ける。メッシュは作り直さない。
+- 地形がない場合、建物は標高 0 m から描かれる。
+
+**霞**（`fog`）: MapLibre が地形に霞をかける場合に、同じ式で建物にも霞をかける。
+
+- 霞の色と範囲は `map.setSky()` の `fog-color`・`horizon-color`・`fog-ground-blend`・`horizon-fog-blend` に従う。
+- 霞がかかる条件は MapLibre と同じである: 地形があり、sky が設定され、メルカトル投影で、ピッチが 60° 以上。ピッチ 60–70° では徐々に濃くなる。
+- 航空障害灯（加算合成）は霞の分だけ暗くなる。
+- 評価済みの sky の値は MapLibre の内部（`map.style.sky`）から読む。読めない場合、霞はかからない。
+
+```ts
+map.setTerrain({ source: 'dem', exaggeration: 1.5 });
+map.setSky({ 'fog-color': '#d1e0f2', 'horizon-color': '#d1e0f2', 'fog-ground-blend': 0.5, 'horizon-fog-blend': 0.8 });
+// 建物は地形に載り、地面と同じ霞がかかる。霞だけ止める場合:
+layer.setFog(false);
+```
+
 ---
 
 ## 9. 時刻と照明
@@ -1086,7 +1118,8 @@ function getWorkerUrl(): string | URL | undefined
 |---|---|
 | 建物の形状 | LOD1 の押し出し形状だけを扱う。セットバックと勾配屋根は描かれない。 |
 | 窓の位置 | 窓の位置は属性と形状から生成される。実際の建物の窓とは一致しない。 |
-| 地形 | 建物は標高 0 m から描かれる。MapLibre の terrain は考慮されない。 |
+| 地形 | 標高は建物ごとに 1 つで、斜面に沿って傾かない。地形の標高はタイルの詳細度によって変わるため、調べ直すまでの間（視点の移動中など）は建物が数 m 浮いたり埋まったりすることがある。 |
+| 霞 | MapLibre と同じく、ピッチ 60° 未満・地形なし・globe 投影ではかからない。 |
 | 投影 | 動作の確認はメルカトル投影だけで行われている。globe 投影は未確認である。 |
 | 影 | 建物は影を落とさない。 |
 | スタイルの数 | 1 レイヤーあたり最大 16 個。 |

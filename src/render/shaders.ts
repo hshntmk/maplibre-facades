@@ -1,4 +1,49 @@
 // GLSL ES 3.00。頂点レイアウトは mesh/layout.ts、スタイルのテクセル配置は style/FacadeStyle.ts と合わせること。
+import { GROUND_TEXTURE_WIDTH } from '../mesh/layout';
+
+/**
+ * 頂点シェーダ共通: 地形の標高と霞の奥行き。
+ * 建物は番号ごとの標高（u_ground）だけ持ち上げる。霞の奥行きは MapLibre の地形の霞と同じ式
+ * （近い面を地図の中心の海面に置いた透視投影の深度）で、gl_Position.w（カメラからの奥行き、ピクセル）から求める
+ */
+const GROUND_VS = /* glsl */ `
+uniform highp sampler2D u_ground;   // R32F: 建物ごとの地形の標高 (m)
+uniform vec2 u_fogRange;            // 霞の近い面・遠い面（カメラからの奥行き、ピクセル）
+out float v_fogDepth;
+float groundOf(float slot) {
+  int i = int(slot + 0.5);
+  return texelFetch(u_ground, ivec2(i % ${GROUND_TEXTURE_WIDTH}, i / ${GROUND_TEXTURE_WIDTH}), 0).r;
+}
+float fogDepth(vec4 clip) {
+  float n = u_fogRange.x, f = u_fogRange.y;
+  return ((f + n) / (f - n) - 2.0 * f * n / ((f - n) * max(clip.w, 1e-3))) * 0.5 + 0.5;
+}
+`;
+
+/** フラグメントシェーダ共通: MapLibre の sky の霞（fog-color / horizon-color / fog-ground-blend / horizon-fog-blend）を重ねる */
+const FOG_FS = /* glsl */ `
+uniform vec4 u_fogColor;            // fog-color（表示の色）, w = fog-ground-blend
+uniform vec4 u_fogHorizon;          // horizon-color, w = horizon-fog-blend
+uniform float u_fogOpacity;         // ピッチによるフェード（0 = 霞なし）
+in float v_fogDepth;
+float fogAmount() {
+  if (u_fogOpacity <= 0.0 || v_fogDepth <= u_fogColor.w) return 0.0;
+  float factor = (v_fogDepth - u_fogColor.w) / max(1.0 - u_fogColor.w, 1e-4);
+  return factor * factor * u_fogOpacity;
+}
+vec3 applyFog(vec3 c) {
+  float a = fogAmount();
+  if (a <= 0.0) return c;
+  float blend = smoothstep(0.0, 1.0, max((v_fogDepth - u_fogHorizon.w) / max(1.0 - u_fogHorizon.w, 1e-4), 0.0));
+  vec3 fog = mix(pow(u_fogColor.rgb, vec3(2.2)), pow(u_fogHorizon.rgb, vec3(2.2)), blend);
+  return pow(mix(pow(clamp(c, 0.0, 1.0), vec3(2.2)), fog, clamp(a, 0.0, 1.0)), vec3(1.0 / 2.2));
+}
+`;
+
+/** 不透明な面のフラグメントシェーダの最後に霞を重ねる（main を包む） */
+function withFog(fs: string): string {
+  return fs.replace('void main() {', `${FOG_FS}\nvoid shade() {`) + 'void main() {\n  shade();\n  fragColor.rgb = applyFog(fragColor.rgb);\n}\n';
+}
 
 
 const COMMON = /* glsl */ `
@@ -104,6 +149,8 @@ layout(location = 2) in vec4 a_seg;     // tangent.xy, runLength（負 = 閉じ�
 layout(location = 3) in vec4 a_bldg;    // style, bSeed, floorHeight, category
 layout(location = 4) in float a_height;
 layout(location = 5) in vec4 a_facade;  // clearance, sunSide, coverHeight, age
+layout(location = 6) in float a_ground;
+${GROUND_VS}
 out vec3 v_world;
 out vec2 v_uv;
 flat out vec4 v_seg;
@@ -111,17 +158,19 @@ flat out vec4 v_bldg;
 flat out float v_height;
 flat out vec4 v_facade;
 void main() {
-  v_world = a_pos;
+  vec3 p = a_pos + vec3(0.0, 0.0, groundOf(a_ground));
+  v_world = p;
   v_uv = a_uv;
   v_seg = a_seg;
   v_bldg = a_bldg;
   v_height = a_height;
   v_facade = a_facade;
-  gl_Position = u_matrix * vec4(a_pos, 1.0);
+  gl_Position = u_matrix * vec4(p, 1.0);
+  v_fogDepth = fogDepth(gl_Position);
 }
 `;
 
-export const FACADE_FS = /* glsl */ `#version 300 es
+export const FACADE_FS = withFog(/* glsl */ `#version 300 es
 ${COMMON}
 uniform float u_litRatio[16];   // カテゴリ別の点灯率
 uniform float u_shopOpen;
@@ -711,7 +760,7 @@ void main() {
 
   fragColor = vec4(toDisplay(color), 1.0);
 }
-`;
+`);
 
 export const ROOF_VS = /* glsl */ `#version 300 es
 ${COMMON}
@@ -719,21 +768,24 @@ uniform mat4 u_matrix;
 layout(location = 0) in vec3 a_pos;
 layout(location = 1) in vec3 a_attr;   // style, bSeed, category
 layout(location = 2) in vec3 a_info;   // axisAngle, roofArea, height
+layout(location = 3) in float a_ground;
+${GROUND_VS}
 out vec3 v_world;
 flat out vec3 v_attr;
 flat out vec3 v_info;
 void main() {
   int sid = int(a_attr.x + 0.5);
   vec3 p = a_pos;
-  p.z -= parapetDrop(sid, a_info.z);
+  p.z += groundOf(a_ground) - parapetDrop(sid, a_info.z);
   v_world = p;
   v_attr = a_attr;
   v_info = a_info;
   gl_Position = u_matrix * vec4(p, 1.0);
+  v_fogDepth = fogDepth(gl_Position);
 }
 `;
 
-export const ROOF_FS = /* glsl */ `#version 300 es
+export const ROOF_FS = withFog(/* glsl */ `#version 300 es
 ${COMMON}
 uniform float u_roofFinish;      // 1 = 用途別の仕上げを描く
 in vec3 v_world;
@@ -810,7 +862,7 @@ void main() {
   vec3 c = toLinear(albedo) * surfaceLight(vec3(0.0, 0.0, 1.0)) + emissive;
   fragColor = vec4(toDisplay(c), 1.0);
 }
-`;
+`);
 
 /** パラペットの内側の面。外壁と同じ頂点を使い、上端から parapetDrop の分だけ内向きの面を描く */
 export const PARAPET_VS = /* glsl */ `#version 300 es
@@ -821,6 +873,8 @@ layout(location = 1) in vec2 a_uv;
 layout(location = 2) in vec4 a_seg;     // tangent.xy, runLength, runSeed
 layout(location = 3) in vec4 a_bldg;    // style, bSeed, floorHeight, category
 layout(location = 4) in float a_height;
+layout(location = 6) in float a_ground;
+${GROUND_VS}
 out vec3 v_world;
 out float v_t;                           // 0 = 屋上面, 1 = パラペットの天端
 flat out vec3 v_normal;                  // 内向き
@@ -830,17 +884,18 @@ void main() {
   float drop = parapetDrop(sid, a_height);
   float top = a_pos.z - a_uv.y + a_height;
   bool isTop = a_uv.y > a_height * 0.5;
-  vec3 p = vec3(a_pos.xy, isTop ? top : top - drop);
+  vec3 p = vec3(a_pos.xy, (isTop ? top : top - drop) + groundOf(a_ground));
   v_world = p;
   v_t = isTop ? 1.0 : 0.0;
   v_normal = vec3(-a_seg.y, a_seg.x, 0.0);
   v_attr = vec3(a_bldg.x, a_bldg.y, a_bldg.w);
   // パラペットがない建物は面積 0 の四角形になり、何も描かれない
   gl_Position = u_matrix * vec4(p, 1.0);
+  v_fogDepth = fogDepth(gl_Position);
 }
 `;
 
-export const PARAPET_FS = /* glsl */ `#version 300 es
+export const PARAPET_FS = withFog(/* glsl */ `#version 300 es
 ${COMMON}
 in vec3 v_world;
 in float v_t;
@@ -865,7 +920,7 @@ void main() {
   vec3 c = toLinear(albedo) * surfaceLight(v_normal) * ao;
   fragColor = vec4(toDisplay(c), 1.0);
 }
-`;
+`);
 
 /** 屋上設備。単位立方体をインスタンスごとに拡大・回転して置く */
 export const EQUIPMENT_VS = /* glsl */ `#version 300 es
@@ -879,6 +934,8 @@ layout(location = 2) in vec3 a_inst0;    // center x, center y, top
 layout(location = 3) in vec3 a_inst1;    // w, d, h
 layout(location = 4) in vec3 a_inst2;    // angle, type, rank
 layout(location = 5) in vec3 a_inst3;    // style, bSeed, height
+layout(location = 6) in float a_ground;
+${GROUND_VS}
 out vec3 v_world;
 out vec3 v_local;                        // 箱の中の位置 (m)。底面中心が原点
 flat out vec3 v_normal;
@@ -895,7 +952,7 @@ void main() {
   vec3 local = a_pos * a_inst1;
   float ca = cos(a_inst2.x), sa = sin(a_inst2.x);
   vec2 xy = vec2(local.x * ca - local.y * sa, local.x * sa + local.y * ca);
-  float base = a_inst0.z - parapetDrop(sid, a_inst3.z);
+  float base = a_inst0.z + groundOf(a_ground) - parapetDrop(sid, a_inst3.z);
   vec3 p = vec3(a_inst0.xy + xy, base + local.z);
   v_world = p;
   v_local = local;
@@ -904,10 +961,11 @@ void main() {
   v_info = vec4(a_inst2.y, a_inst3.y, a_inst3.x, 0.0);
   v_size = a_inst1;
   gl_Position = u_matrix * vec4(p, 1.0);
+  v_fogDepth = fogDepth(gl_Position);
 }
 `;
 
-export const EQUIPMENT_FS = /* glsl */ `#version 300 es
+export const EQUIPMENT_FS = withFog(/* glsl */ `#version 300 es
 ${COMMON}
 in vec3 v_world;
 in vec3 v_local;
@@ -984,7 +1042,7 @@ void main() {
   vec3 c = toLinear(albedo) * surfaceLight(v_normal) * ao + emissive;
   fragColor = vec4(toDisplay(c), 1.0);
 }
-`;
+`);
 
 /** 航空障害灯（点スプライト）。加算合成で描く */
 export const LIGHT_VS = /* glsl */ `#version 300 es
@@ -998,6 +1056,8 @@ uniform float u_time;
 uniform float u_pixelRatio;
 layout(location = 0) in vec3 a_pos;
 layout(location = 1) in vec2 a_info;    // height, phase
+layout(location = 2) in float a_ground;
+${GROUND_VS}
 out float v_intensity;
 void main() {
   if (u_lightsEnabled < 0.5 || a_info.x < u_lightMinHeight || u_night < 0.02) {
@@ -1005,7 +1065,7 @@ void main() {
     gl_PointSize = 0.0;
     return;
   }
-  vec3 p = a_pos + vec3(0.0, 0.0, 0.5);
+  vec3 p = a_pos + vec3(0.0, 0.0, 0.5 + groundOf(a_ground));
   float dist = length(p - u_eye);
   // 中光度の赤色灯は毎分 20〜60 回の明滅。ここでは 1.5 秒周期で、建物ごとに位相をずらす
   float f = fract(u_time / 1.5 + a_info.y);
@@ -1014,6 +1074,7 @@ void main() {
   v_intensity = u_lightIntensity * u_night * on;
   gl_PointSize = clamp(4000.0 / dist, 7.0, 24.0) * u_pixelRatio;
   gl_Position = u_matrix * vec4(p, 1.0);
+  v_fogDepth = fogDepth(gl_Position);
 }
 `;
 
@@ -1022,12 +1083,14 @@ precision highp float;
 uniform vec3 u_lightColor;
 in float v_intensity;
 out vec4 fragColor;
+${FOG_FS}
 void main() {
   float r = length(gl_PointCoord - 0.5) * 2.0;
   if (r > 1.0 || v_intensity <= 0.0) discard;
   float core = 1.0 - smoothstep(0.15, 0.32, r);
   float halo = exp(-r * r * 4.0) * 0.8;
   vec3 c = u_lightColor * halo + mix(u_lightColor, vec3(1.0), 0.6) * core;
-  fragColor = vec4(c * v_intensity, 0.0);
+  // 加算合成なので、霞の分だけ弱める
+  fragColor = vec4(c * v_intensity * (1.0 - clamp(fogAmount(), 0.0, 1.0)), 0.0);
 }
 `;
