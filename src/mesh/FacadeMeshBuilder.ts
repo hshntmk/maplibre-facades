@@ -2,7 +2,8 @@ import earcut from 'earcut';
 import { mercatorX, mercatorY, meterInMercator } from '../math/mercator';
 import { categoryIndex, type BuildingRecord, type LngLatRing } from '../model/BuildingRecord';
 import { DEFAULT_EXPOSURE_THRESHOLDS, analyzeFacades, exposureOf, type BuildingRings, type ExposureThresholds, type Point } from './FacadeAnalyzer';
-import { GROUND_STRIDE, ROOF_STRIDE, WALL_STRIDE, type FacadeLengths, type FacadeMesh, type MeshReference } from './layout';
+import { buildRingBalconies, firstBalconyFloor, floorLayout, type BalconyEmitter, type BalconyLayout } from './Balconies';
+import { BALCONY_STRIDE, GROUND_STRIDE, ROOF_STRIDE, WALL_STRIDE, type FacadeLengths, type FacadeMesh, type MeshReference } from './layout';
 import { EQUIPMENT_TYPES, generateRooftop } from './RooftopGenerator';
 
 // フットプリントから壁（窓はシェーダで描くので 1 セグメント = 1 四角形）と屋根のメッシュを作る。
@@ -74,10 +75,14 @@ interface PendingBuilding {
 export class FacadeMeshBuilder {
   private pending: PendingBuilding[] = [];
 
-  /** @param thresholds スタイル番号ごとの壁面分類のしきい値 */
+  /**
+   * @param thresholds スタイル番号ごとの壁面分類のしきい値
+   * @param balconies スタイル番号ごとのバルコニーの設定（省略時はバルコニーの形を作らない）
+   */
   constructor(
     readonly reference: MeshReference,
     private readonly thresholds: ExposureThresholds[] = [],
+    private readonly balconies: BalconyLayout[] = [],
   ) {}
 
   private thresholdsOf(styleIndex: number): ExposureThresholds {
@@ -104,6 +109,8 @@ export class FacadeMeshBuilder {
     const equipment = new GrowableF32();
     const lights = new GrowableF32();
     const grounds = new GrowableF32();
+    const balconies = new GrowableF32();
+    const balconyIdx = new GrowableU32();
     const lengths: FacadeLengths = { front: 0, side: 0, party: 0, sunSide: 0 };
 
     const facades = analyzeFacades(
@@ -134,6 +141,8 @@ export class FacadeMeshBuilder {
       const thresholds = this.thresholdsOf(styleIndex);
       const height = top - bottom;
       const age = buildingAge(record.yearBuilt);
+      const balconyLayout = this.balconies[styleIndex];
+      const floors = balconyLayout && balconyLayout.depth > 0 ? floorLayout(height, fh, balconyLayout.raisedGroundFloor) : undefined;
 
       // ---- 屋上設備と航空障害灯
       const rooftop = generateRooftop({
@@ -153,27 +162,57 @@ export class FacadeMeshBuilder {
       polygons.forEach((rings, pi) => {
         // ---- 壁: リングの各辺を 1 枚の四角形に。u は連続面に沿った距離
         rings.forEach((ring, ri) => {
-          for (let i = 0; i < ring.length; i++) {
+          const ringFacades = facades[bi][pi][ri];
+          const segmentLength = (i: number) => {
             const [x0, y0] = ring[i];
             const [x1, y1] = ring[(i + 1) % ring.length];
-            const len = Math.hypot(x1 - x0, y1 - y0);
-            if (len < 0.05) continue;
-            const f = facades[bi][pi][ri][i];
+            return Math.hypot(x1 - x0, y1 - y0);
+          };
+          // バルコニーを付ける最初の階（辺ごと。0 = なし）
+          const from = ring.map((_, i) =>
+            floors && segmentLength(i) >= 0.05 ? firstBalconyFloor(balconyLayout, ringFacades[i], height, bottom, floors, thresholds) : 0,
+          );
+          // 外壁と同じ形式の頂点。balconyDepth が負なら引っ込んだ壁
+          const wallQuad = (i: number, a: Point, b: Point, uA: number, uB: number, zBottom: number, zTop: number, balconyFrom: number, balconyDepth: number) => {
+            const f = ringFacades[i];
+            const len = segmentLength(i);
+            const [x0, y0] = ring[i];
+            const [x1, y1] = ring[(i + 1) % ring.length];
             const tx = (x1 - x0) / len;
             const ty = (y1 - y0) / len;
             const runSeed = hashId(`${record.id}:run${f.runId}`);
             const base = walls.length / WALL_STRIDE;
             const v = (x: number, y: number, z: number, u: number) =>
-              walls.push(x, y, z, u, z - bottom, tx, ty, f.runLength, runSeed, styleIndex, seed, fh, cat, top - bottom, f.clearance, f.sunSide ? 1 : 0, f.coverHeight - bottom, age, ground);
-            v(x0, y0, bottom, f.runOffset);
-            v(x1, y1, bottom, f.runOffset + len);
-            v(x1, y1, top, f.runOffset + len);
-            v(x0, y0, top, f.runOffset);
+              walls.push(x, y, z, u, z - bottom, tx, ty, f.runLength, runSeed, styleIndex, seed, fh, cat, top - bottom, f.clearance, f.sunSide ? 1 : 0, f.coverHeight - bottom, age, ground, balconyFrom, balconyDepth);
+            v(a[0], a[1], zBottom, uA);
+            v(b[0], b[1], zBottom, uB);
+            v(b[0], b[1], zTop, uB);
+            v(a[0], a[1], zTop, uA);
             wallIdx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+          };
+          for (let i = 0; i < ring.length; i++) {
+            const len = segmentLength(i);
+            if (len < 0.05) continue;
+            const f = ringFacades[i];
+            const depth = from[i] > 0 ? balconyLayout.depth : 0;
+            wallQuad(i, ring[i], ring[(i + 1) % ring.length], f.runOffset, f.runOffset + len, bottom, top, from[i], depth);
 
             lengths[exposureOf(f.clearance, thresholds)] += len;
             if (f.sunSide) lengths.sunSide += len;
           }
+
+          if (!floors || !from.some((k) => k > 0)) return;
+          const emitter: BalconyEmitter = {
+            innerWall: (i, a, b, uA, uB, balconyFrom, zBottom, zTop) => wallQuad(i, a, b, uA, uB, zBottom, zTop, balconyFrom, -balconyLayout.depth),
+            quad: (part, corners, normal, outward, depth, rel, ceiling) => {
+              const base = balconies.length / BALCONY_STRIDE;
+              corners.forEach(([x, y, z], c) =>
+                balconies.push(x, y, z, ...normal, outward[0], outward[1], depth[c], rel[c], ceiling, part, styleIndex, seed, ground),
+              );
+              balconyIdx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+            },
+          };
+          buildRingBalconies({ ring, facades: ringFacades, from, layout: balconyLayout, floors, bottom }, emitter);
         });
 
         // ---- 屋根
@@ -200,6 +239,8 @@ export class FacadeMeshBuilder {
       roofIndices: roofIdx.result(),
       equipment: equipment.result(),
       lights: lights.result(),
+      balconies: balconies.result(),
+      balconyIndices: balconyIdx.result(),
       grounds: grounds.result(),
       facadeLengths: lengths,
     };

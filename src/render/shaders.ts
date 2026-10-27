@@ -1,5 +1,5 @@
 // GLSL ES 3.00。頂点レイアウトは mesh/layout.ts、スタイルのテクセル配置は style/FacadeStyle.ts と合わせること。
-import { GROUND_TEXTURE_WIDTH } from '../mesh/layout';
+import { BALCONY_CEILING_DROP, BALCONY_FLOOR, BALCONY_RAIL, GROUND_TEXTURE_WIDTH } from '../mesh/layout';
 
 /**
  * 頂点シェーダ共通: 地形の標高と霞の奥行き。
@@ -138,6 +138,37 @@ vec3 surfaceLight(vec3 n) {
   float sun = max(dot(n, u_sunDir), 0.0) * smoothstep(-0.02, 0.08, u_sunDir.z);
   return ambient + toLinear(u_sunColor) * sun * 1.1;
 }
+
+// バルコニーの高さ（階の床から m）。mesh/layout.ts と同じ値
+const float BALCONY_FLOOR = ${BALCONY_FLOOR.toFixed(3)};
+const float BALCONY_RAIL = ${BALCONY_RAIL.toFixed(3)};
+const float BALCONY_CEILING_DROP = ${BALCONY_CEILING_DROP.toFixed(3)};
+
+/** 手すりの種類: true = コンクリートの腰壁（外壁と同じ仕上げ）、false = 半透明のパネル */
+bool concreteRail(float bSeed) { return hash12(vec2(bSeed * 67.0, 3.1)) < 0.4; }
+
+/**
+ * バルコニーの奥の点（外壁の面からの奥行き depth、階の床からの高さ rel）に日が差す割合。
+ * 太陽へ向かう線が外壁の面を通る高さが、手すりより上・天井より下なら差す。半透明の手すりは一部を通す
+ */
+float balconySun(vec2 outward, float depth, float rel, float ceiling, float bSeed) {
+  float sn = dot(outward, u_sunDir.xy);
+  if (sn <= 0.01) return 0.0;
+  float h = rel + depth * u_sunDir.z / sn;
+  float open = smoothstep(BALCONY_RAIL - 0.03, BALCONY_RAIL + 0.03, h) * (1.0 - smoothstep(ceiling - 0.03, ceiling + 0.03, h));
+  float throughRail = (concreteRail(bSeed) ? 0.0 : 0.35) * step(BALCONY_FLOOR, h) * step(h, BALCONY_RAIL);
+  return max(open, throughRail);
+}
+
+/**
+ * バルコニーの奥の環境光。空は外壁の面の開口からしか見えないので、空の色（青み）を弱め、
+ * 床や向かいの建物からの照り返し（日の高さに応じた中間色）を足す
+ */
+vec3 balconyAmbient(vec3 skyAmbient, float k) {
+  vec3 neutral = vec3(dot(skyAmbient, vec3(0.3, 0.5, 0.2))) * vec3(1.04, 1.0, 0.94);
+  vec3 bounce = toLinear(u_sunColor) * 0.07 * smoothstep(-0.02, 0.3, u_sunDir.z);
+  return mix(skyAmbient, neutral, 0.6) * k + bounce;
+}
 `;
 
 export const FACADE_VS = /* glsl */ `#version 300 es
@@ -149,7 +180,7 @@ layout(location = 2) in vec4 a_seg;     // tangent.xy, runLength（負 = 閉じ�
 layout(location = 3) in vec4 a_bldg;    // style, bSeed, floorHeight, category
 layout(location = 4) in float a_height;
 layout(location = 5) in vec4 a_facade;  // clearance, sunSide, coverHeight, age
-layout(location = 6) in float a_ground;
+layout(location = 6) in vec3 a_ext;     // ground, balconyFrom, balconyDepth
 ${GROUND_VS}
 out vec3 v_world;
 out vec2 v_uv;
@@ -157,8 +188,10 @@ flat out vec4 v_seg;
 flat out vec4 v_bldg;
 flat out float v_height;
 flat out vec4 v_facade;
+flat out vec2 v_balcony;
 void main() {
-  vec3 p = a_pos + vec3(0.0, 0.0, groundOf(a_ground));
+  vec3 p = a_pos + vec3(0.0, 0.0, groundOf(a_ext.x));
+  v_balcony = a_ext.yz;
   v_world = p;
   v_uv = a_uv;
   v_seg = a_seg;
@@ -178,6 +211,7 @@ uniform float u_interior;       // 1 = インテリアマッピング有効
 uniform float u_reflection;     // 反射の強さ（レイヤー全体の倍率。1 = 物理的な既定値）
 uniform vec4 u_weathering;      // 外壁のくすみ: 強さ (0 = OFF), 雨だれ, くすみ, しみ
 uniform vec2 u_surface;         // 表面の細部: 素材の強さ (0 = OFF), ガラスの歪み (0 = OFF)
+uniform float u_balconies;      // 1 = バルコニーを立体で描く
 // 外壁の素材（material/WallMaterials.ts）: 法線 xy, ラフネス, 凹み。層 = 素材の番号
 precision highp sampler2DArray;
 uniform sampler2DArray u_materials;
@@ -193,6 +227,7 @@ flat in vec4 v_seg;
 flat in vec4 v_bldg;
 flat in float v_height;
 flat in vec4 v_facade;
+flat in vec2 v_balcony;         // バルコニーを付ける最初の階, 奥行き（正 = 外壁、負 = 引っ込んだ壁、0 = なし）
 out vec4 fragColor;
 
 const vec3 WARM = vec3(1.0, 0.52, 0.20);
@@ -501,6 +536,24 @@ void main() {
     return;
   }
 
+  // ---------------------------------------------------------------- バルコニー（立体）
+  // 外壁は、バルコニーのある階で手すりより上・天井より下を抜き、奥の引っ込んだ壁と床・天井（BALCONY_FS）を見せる。
+  // 窓 1 枚分の区画が画面上で小さい所は抜かずに、外壁の面に手すりを描く（奥の形は外壁に隠れる）
+  float balconyDepth = v_balcony.y;
+  bool innerWall = balconyDepth < 0.0;
+  bool balconyFloor = u_balconies > 0.5 && balconyDepth != 0.0 && hasWindow && floorIdx >= v_balcony.x;
+  bool openBalcony = balconyFloor && !innerWall && cellPx > 10.0;
+  bool cutOut = openBalcony && cy > BALCONY_RAIL && cy < cellH - BALCONY_CEILING_DROP;
+  if (u_balconies > 0.5) balcony = balconyFloor && !innerWall && !openBalcony ? balcony : 0.0;
+  if (openBalcony) hasWindow = false;
+  // 引っ込んだ壁: 上の床が空を半分ほど隠し、日は手すりと天井の間からだけ差す
+  float balconyAmbientK = 1.0, balconySunK = 1.0;
+  if (innerWall && balconyFloor) {
+    balconyAmbientK = 0.6;
+    balconySunK = balconySun(N.xy, -balconyDepth, cy, cellH - BALCONY_CEILING_DROP, bSeed);
+    wallLight = balconyAmbient(ambient, balconyAmbientK) + toLinear(u_sunColor) * sunLambert * 1.1 * balconySunK + streetWash * 0.3;
+  }
+
   // ---------------------------------------------------------------- 部屋（複数の窓が 1 つの部屋に面する）
   // フロアごとに部屋の幅（窓の数）を決め、連続する窓をまとめる。ワンフロアの階と 1 階の店舗・ロビーは連続面全体で 1 部屋
   vec4 t21 = styleTexel(sid, 21);  // windowsPerRoom, openPlanRatio
@@ -606,9 +659,10 @@ void main() {
       float rough = m.z;
       float cavity = mix(1.0, m.w, min(k, 1.0));
       // 日の当たらない壁は、凹凸の向きによらず日が当たらない
-      float sunVis = smoothstep(-0.02, 0.08, u_sunDir.z) * clamp(dot(N, u_sunDir) * 8.0, 0.0, 1.0);
+      float sunVis = smoothstep(-0.02, 0.08, u_sunDir.z) * clamp(dot(N, u_sunDir) * 8.0, 0.0, 1.0) * balconySunK;
       float NdotL = max(dot(Nm, u_sunDir), 0.0) * sunVis;
       vec3 amb = mix(toLinear(u_skyHorizon), toLinear(u_skyZenith), 0.5 + 0.3 * Nm.z) * 0.9 + vec3(0.012, 0.011, 0.01);
+      if (balconyAmbientK < 1.0) amb = balconyAmbient(amb, balconyAmbientK);
       vec3 diffuse = albedoLin * (amb + toLinear(u_sunColor) * NdotL * 1.1 + streetWash) * cavity * diffuseKeep;
       // つや（GGX）: 釉薬・磨いた石・金属の面に太陽と空が映る。汚れたところはつやが落ちる
       vec3 Vv = -V;
@@ -701,6 +755,7 @@ void main() {
 
     // ガラス: 透過した室内 + 反射した外の景色。どちらが勝つかは内外の明るさの差で決まる
     vec3 env = reflectedEnvironment(Rg, N, T, v_uv.x, v_uv.y, clearance, coverHeight, ambient, bSeed);
+    if (innerWall) env *= 0.55;  // 引っ込んだ窓には天井と手すりが映る
     vec3 transmitted = inside * mix(vec3(1.0), toLinear(buildingGlassTint(sid, bSeed)) * 2.0, 0.35) * interiorExposure();
     // コーティングされたガラスは映り込みにも色が付く（青・緑・ブロンズなど）
     vec3 glass = transmitted * (1.0 - reflAmt) + env * reflAmt * glassReflectTint;
@@ -719,11 +774,14 @@ void main() {
     color = wallColor;
   }
 
-  // バルコニーの手すり（住宅、2 階以上）
-  if (balcony > 0.0 && !isGround && hasWindow && cy < 1.1) {
-    vec3 panel = toLinear(vec3(0.7, 0.73, 0.75)) * wallLight;
-    float edge = step(cy, 0.18);
-    color = mix(color, mix(panel, wallColor, edge), 0.8 * balcony);
+  // バルコニーの手すり（住宅、2 階以上）。立体で描くときは、外壁の面が手すりそのもの
+  float railK = openBalcony ? 1.0 : (balcony > 0.0 && !isGround && hasWindow ? 0.8 * balcony : 0.0);
+  if (railK > 0.0 && cy < BALCONY_RAIL) {
+    vec3 rail;
+    if (cy < BALCONY_FLOOR) rail = wallColor;                                        // 床スラブの小口
+    else if (concreteRail(bSeed)) rail = wallColor * (cy > BALCONY_RAIL - 0.08 ? 1.08 : 0.96);  // 腰壁と笠木
+    else rail = toLinear(cy > BALCONY_RAIL - 0.06 ? vec3(0.55, 0.56, 0.57) : vec3(0.7, 0.73, 0.75)) * wallLight;  // 笠木（アルミ）とパネル
+    color = mix(color, rail, railK);
   }
 
   // 窓まわりのにじみ（擬似ブルーム）。カメラのにじみに近づけるため、幅は画面上で 2〜3 ピクセル（実寸 5〜35cm）にし、
@@ -758,6 +816,8 @@ void main() {
     color = mix(avg, color, detail);
   }
 
+  // 微分（素材のミップなど）を求め終えてから抜く
+  if (cutOut) discard;
   fragColor = vec4(toDisplay(color), 1.0);
 }
 `);
@@ -873,18 +933,23 @@ layout(location = 1) in vec2 a_uv;
 layout(location = 2) in vec4 a_seg;     // tangent.xy, runLength, runSeed
 layout(location = 3) in vec4 a_bldg;    // style, bSeed, floorHeight, category
 layout(location = 4) in float a_height;
-layout(location = 6) in float a_ground;
+layout(location = 6) in vec3 a_ext;     // ground, balconyFrom, balconyDepth
 ${GROUND_VS}
 out vec3 v_world;
 out float v_t;                           // 0 = 屋上面, 1 = パラペットの天端
 flat out vec3 v_normal;                  // 内向き
 flat out vec3 v_attr;                    // style, bSeed, category
 void main() {
+  // バルコニーの引っ込んだ壁にはパラペットがない（画面の外に出して描かない）
+  if (a_ext.z < 0.0) {
+    gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+    return;
+  }
   int sid = int(a_bldg.x + 0.5);
   float drop = parapetDrop(sid, a_height);
   float top = a_pos.z - a_uv.y + a_height;
   bool isTop = a_uv.y > a_height * 0.5;
-  vec3 p = vec3(a_pos.xy, (isTop ? top : top - drop) + groundOf(a_ground));
+  vec3 p = vec3(a_pos.xy, (isTop ? top : top - drop) + groundOf(a_ext.x));
   v_world = p;
   v_t = isTop ? 1.0 : 0.0;
   v_normal = vec3(-a_seg.y, a_seg.x, 0.0);
@@ -918,6 +983,77 @@ void main() {
   albedo = mix(albedo, vec3(0.72, 0.73, 0.72), cap);
   float ao = mix(0.55, 1.0, smoothstep(0.0, 0.6, v_t));
   vec3 c = toLinear(albedo) * surfaceLight(v_normal) * ao;
+  fragColor = vec4(toDisplay(c), 1.0);
+}
+`);
+
+/** バルコニーの床・天井・袖壁・隔て板（引っ込んだ壁は外壁と同じ FACADE_FS で描く） */
+export const BALCONY_VS = /* glsl */ `#version 300 es
+${COMMON}
+uniform mat4 u_matrix;
+layout(location = 0) in vec3 a_pos;
+layout(location = 1) in vec3 a_normal;
+layout(location = 2) in vec4 a_facade;   // 外壁の外向き法線 xy, 外壁の面からの奥行き, 階の床からの高さ
+layout(location = 3) in vec4 a_info;     // 天井の高さ, part, style, bSeed
+layout(location = 4) in float a_ground;
+${GROUND_VS}
+out vec3 v_world;
+out vec2 v_place;                        // 外壁の面からの奥行き, 階の床からの高さ
+flat out vec3 v_normal;
+flat out vec2 v_outward;
+flat out vec4 v_info;
+void main() {
+  vec3 p = a_pos + vec3(0.0, 0.0, groundOf(a_ground));
+  v_world = p;
+  v_place = a_facade.zw;
+  v_normal = a_normal;
+  v_outward = a_facade.xy;
+  v_info = a_info;
+  gl_Position = u_matrix * vec4(p, 1.0);
+  v_fogDepth = fogDepth(gl_Position);
+}
+`;
+
+export const BALCONY_FS = withFog(/* glsl */ `#version 300 es
+${COMMON}
+in vec3 v_world;
+in vec2 v_place;
+flat in vec3 v_normal;
+flat in vec2 v_outward;
+flat in vec4 v_info;
+out vec4 fragColor;
+void main() {
+  float ceiling = v_info.x;
+  int part = int(v_info.y + 0.5);
+  int sid = int(v_info.z + 0.5);
+  float bSeed = v_info.w;
+  vec3 V = normalize(v_world - u_eye);
+  // 袖壁と隔て板は両面から見える
+  vec3 n = dot(v_normal, V) > 0.0 ? -v_normal : v_normal;
+
+  vec3 albedo;
+  float ao;
+  if (part == 0) {          // 床（防水の塗装）
+    albedo = vec3(0.52, 0.52, 0.5);
+    ao = 0.7;
+  } else if (part == 1) {   // 天井（上の階のバルコニーの裏）
+    albedo = vec3(0.86, 0.86, 0.84);
+    ao = 0.5;
+  } else if (part == 2) {   // 袖壁（外壁と同じ仕上げ）
+    albedo = buildingWallColor(sid, bSeed);
+    ao = 0.65;
+  } else {                  // 隔て板
+    albedo = vec3(0.84, 0.86, 0.86);
+    ao = 0.7;
+  }
+  // 床・天井との入隅を暗く
+  if (part >= 2) ao *= mix(0.7, 1.0, smoothstep(0.0, 0.35, min(v_place.y - BALCONY_FLOOR, ceiling - v_place.y)));
+
+  vec3 ambient = mix(toLinear(u_skyHorizon), toLinear(u_skyZenith), 0.5 + 0.3 * n.z) * 0.9 + vec3(0.012, 0.011, 0.01);
+  float sun = max(dot(n, u_sunDir), 0.0) * smoothstep(-0.02, 0.08, u_sunDir.z) * balconySun(v_outward, v_place.x, v_place.y, ceiling, bSeed);
+  // 夜は部屋の明かりが少し漏れる
+  vec3 spill = vec3(1.0, 0.8, 0.6) * 0.012 * u_night;
+  vec3 c = toLinear(albedo) * (balconyAmbient(ambient, ao) + toLinear(u_sunColor) * sun * 1.1 + spill);
   fragColor = vec4(toDisplay(c), 1.0);
 }
 `);

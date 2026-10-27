@@ -142,9 +142,9 @@ describe('FacadeMeshBuilder', () => {
     expect(minY).toBeCloseTo(0, 3);
     expect(maxX).toBeGreaterThan(8.5);
     expect(maxY).toBeGreaterThan(10.5);
-    // 頂点の最後の値が建物の番号
+    // 頂点の 18 番目の値が建物の番号
     const wallSlots = new Set<number>();
-    for (let i = WALL_STRIDE - 1; i < mesh.walls.length; i += WALL_STRIDE) wallSlots.add(mesh.walls[i]);
+    for (let i = 18; i < mesh.walls.length; i += WALL_STRIDE) wallSlots.add(mesh.walls[i]);
     expect([...wallSlots].sort()).toEqual([0, 1]);
     expect(mesh.roofs[ROOF_STRIDE - 1]).toBe(0);
     expect(mesh.roofs[mesh.roofs.length - 1]).toBe(1);

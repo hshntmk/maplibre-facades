@@ -1,11 +1,12 @@
 // メッシュの頂点レイアウトと基準点。メインスレッドと Worker の両方から参照する（依存なし）。
 
 /** 壁の頂点（floats）。シェーダの attribute と合わせること */
-export const WALL_STRIDE = 19;
+export const WALL_STRIDE = 21;
 // 0-2 pos | 3-4 uv（u: 連続面に沿った距離 m, v: 高さ m） | 5-6 tangent | 7 runLength（負 = 角のない閉じた面）
 // 8 runSeed | 9 style | 10 bSeed | 11 floorHeight | 12 category | 13 height
 // 14 clearance（前面のあき m） | 15 sunSide | 16 coverHeight（前面をふさぐ建物の高さ m） | 17 age（築年数 0–1、不明は -1）
 // 18 ground（タイル内の建物の番号。地形の標高を引く。FacadeMesh.grounds を参照）
+// 19 balconyFrom（バルコニーを付ける最初の階。0 = なし） | 20 balconyDepth（奥行き m。正 = 外壁、負 = 引っ込んだ壁、0 = なし）
 export const WALL_ATTRIBUTES = [
   { location: 0, size: 3, offset: 0 },
   { location: 1, size: 2, offset: 3 },
@@ -13,8 +14,29 @@ export const WALL_ATTRIBUTES = [
   { location: 3, size: 4, offset: 9 },
   { location: 4, size: 1, offset: 13 },
   { location: 5, size: 4, offset: 14 },
-  { location: 6, size: 1, offset: 18 },
+  { location: 6, size: 3, offset: 18 },
 ];
+
+/** バルコニーの床・天井・袖壁・隔て板の頂点（floats） */
+export const BALCONY_STRIDE = 15;
+// 0-2 pos | 3-5 normal | 6-7 外壁の外向き法線 xy | 8 外壁の面からの奥行き (m) | 9 階の床からの高さ (m)
+// 10 天井の高さ（階の床から m） | 11 part（BalconyPart） | 12 style | 13 bSeed | 14 ground
+export const BALCONY_ATTRIBUTES = [
+  { location: 0, size: 3, offset: 0 },
+  { location: 1, size: 3, offset: 3 },
+  { location: 2, size: 4, offset: 6 },
+  { location: 3, size: 4, offset: 10 },
+  { location: 4, size: 1, offset: 14 },
+];
+/** バルコニーの部位（シェーダの色分けと合わせること） */
+export const BALCONY_PARTS = { floor: 0, ceiling: 1, sideWall: 2, partition: 3 } as const;
+export type BalconyPart = (typeof BALCONY_PARTS)[keyof typeof BALCONY_PARTS];
+/** 階の床からバルコニーの床（スラブの天端）までの高さ (m) */
+export const BALCONY_FLOOR = 0.15;
+/** 階の床から手すりの天端までの高さ (m) */
+export const BALCONY_RAIL = 1.25;
+/** 上の階の床からバルコニーの天井（スラブの下端）までの下がり (m) */
+export const BALCONY_CEILING_DROP = 0.2;
 
 /** 屋根の頂点（floats） */
 export const ROOF_STRIDE = 10;
@@ -79,6 +101,9 @@ export interface FacadeMesh {
   roofIndices: Uint32Array;
   equipment: Float32Array;
   lights: Float32Array;
+  /** バルコニーの床・天井・袖壁・隔て板（引っ込んだ壁は walls に入る） */
+  balconies: Float32Array;
+  balconyIndices: Uint32Array;
   /** 建物ごとの地形の標高を引く位置（GROUND_STRIDE ごと） */
   grounds: Float32Array;
 }

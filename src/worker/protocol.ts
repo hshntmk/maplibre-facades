@@ -1,5 +1,6 @@
 import type { AdapterConfig } from '../adapters/BuildingAdapter';
 import type { BuildingFacadeLayerErrorCode } from '../errors';
+import type { BalconyLayout } from '../mesh/Balconies';
 import type { ExposureThresholds } from '../mesh/FacadeAnalyzer';
 import type { MaterialTexture } from '../material/WallMaterials';
 import type { FacadeLengths, FacadeMesh } from '../mesh/layout';
@@ -22,6 +23,8 @@ export interface PipelineConfig {
   styleNames: string[];
   /** スタイル番号ごとの壁面分類のしきい値（省略時は既定値） */
   exposureThresholds?: ExposureThresholds[];
+  /** スタイル番号ごとのバルコニーの設定（省略時はバルコニーの形を作らない） */
+  balconies?: BalconyLayout[];
 }
 
 export interface InitRequest {

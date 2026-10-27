@@ -84,6 +84,7 @@ export function validateStyle(name: string, s: FacadeStyle): void {
   checkRange(p('blindsRatio'), s.blindsRatio, 0, 1);
   if (s.windowsPerRoom !== undefined) checkRange(p('windowsPerRoom'), s.windowsPerRoom, 1, 50);
   if (s.openPlanRatio !== undefined) checkRange(p('openPlanRatio'), s.openPlanRatio, 0, 1);
+  if (s.balconyDepth !== undefined) checkRange(p('balconyDepth'), s.balconyDepth, 0.5, 3);
   checkRange(p('floorCoherence'), s.floorCoherence, 0, 1);
   checkRange(p('warmRatio'), s.warmRatio, 0, 1);
   checkRange(p('litScale'), s.litScale, 0, 10);
@@ -100,6 +101,7 @@ export function validateLayerOptions(opts: {
   interior?: unknown;
   terrain?: unknown;
   fog?: unknown;
+  balconies?: unknown;
   workers?: unknown;
   debug?: unknown;
 }): void {
@@ -139,6 +141,7 @@ export function validateLayerOptions(opts: {
   if (opts.interior !== undefined && typeof opts.interior !== 'boolean') fail('interior must be a boolean');
   if (opts.terrain !== undefined && typeof opts.terrain !== 'boolean') fail('terrain must be a boolean');
   if (opts.fog !== undefined && typeof opts.fog !== 'boolean') fail('fog must be a boolean');
+  if (opts.balconies !== undefined && typeof opts.balconies !== 'boolean') fail('balconies must be a boolean');
   if (opts.workers !== undefined && (!Number.isInteger(opts.workers) || (opts.workers as number) < 1 || (opts.workers as number) > 16)) fail(`workers must be an integer between 1 and 16 (got ${JSON.stringify(opts.workers)})`);
   if (opts.debug !== undefined && !(DEBUG_MODES as readonly unknown[]).includes(opts.debug)) fail(`unknown debug mode: ${opts.debug}`);
 }

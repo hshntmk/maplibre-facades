@@ -39,6 +39,7 @@
   - 8.3 `SurfaceDetailOptions`
   - 8.4 `DebugMode`
   - 8.5 地形と霞
+  - 8.6 バルコニー
 - 9\. 時刻と照明
   - 9.1 `computeLighting()`
   - 9.2 `LightingState`
@@ -142,6 +143,7 @@ new BuildingFacadeLayer(options: BuildingFacadeLayerOptions)
 | `surfaceDetail` | `boolean \| SurfaceDetailOptions` | `DEFAULT_SURFACE_DETAIL_OPTIONS` | 外壁の素材とガラスの歪み。[8.3](#83-surfacedetailoptions) を参照。 |
 | `terrain` | `boolean` | `true` | MapLibre の地形があるとき、建物を地面の標高に載せる。[8.5](#85-地形と霞) を参照。 |
 | `fog` | `boolean` | `true` | MapLibre の sky の霞を建物にもかける。[8.5](#85-地形と霞) を参照。 |
+| `balconies` | `boolean` | `true` | バルコニーを立体で描く。[8.6](#86-バルコニー) を参照。 |
 | `debug` | `DebugMode` | `'none'` | 色分け表示。[8.4](#84-debugmode) を参照。 |
 | `workerUrl` | `string \| URL` | `undefined` | Worker のスクリプトの URL。[12](#12-worker) を参照。 |
 | `workers` | `number` | CPU のコア数の半分（1–4） | 3D Tiles の処理に使う Worker の数。範囲は 1–16 の整数。GeoJSON では常に 1。[12.3](#123-worker-のプール) を参照。 |
@@ -166,6 +168,7 @@ new BuildingFacadeLayer(options: BuildingFacadeLayerOptions)
 | `weathering` | `Readonly<ResolvedWeatheringOptions>` | 既定値を補完した汚れの設定。 |
 | `surfaceDetail` | `Readonly<ResolvedSurfaceDetailOptions>` | 既定値を補完した表面の細部の設定。 |
 | `fog` | `boolean` | 建物に霞をかけるかどうか。 |
+| `balconies` | `boolean` | バルコニーを立体で描くかどうか。 |
 | `lightingState` | `Readonly<LightingState>` | 現在の時刻から計算した照明。[9.2](#92-lightingstate) を参照。 |
 
 ### 2.4 メソッド
@@ -195,6 +198,10 @@ layer.setTimeOfDay(18.5);
 #### `setFog(enabled: boolean): this`
 
 建物に霞をかけるかどうかを設定する。霞がかかる条件は [8.5](#85-地形と霞) を参照。`enabled` が真偽値でない場合、例外を送出する。
+
+#### `setBalconies(enabled: boolean): this`
+
+バルコニーを立体で描くかどうかを設定する。形は Worker で常に作ってあるため、切り替えてもデータの再読み込みは起きない。詳細は [8.6](#86-バルコニー) を参照。`enabled` が真偽値でない場合、例外を送出する。
 
 #### `setRoof(options: RoofOptions): this`
 
@@ -634,7 +641,8 @@ type PaletteColor = RGB | { color: RGB; weight: number };  // RGB の重みは 1
 | `mullions` | `number` | 1–16 | 窓の縦方向の分割数。 |
 | `curtainWall` | `boolean` | — | `true` の場合、全面ガラスとして描く。 |
 | `groundFloor` | `GroundFloor` | `'same' \| 'storefront' \| 'lobby'` | 1 階の扱い。`'storefront'` と `'lobby'` は 1 階の階高を上げ、大判ガラスとして描く。 |
-| `balcony` | `number` | 0–1 | 2 階以上のバルコニー手すりの強さ。 |
+| `balcony` | `number` | 0–1 | 2 階以上のバルコニー手すりの強さ。`0` の場合、バルコニーを作らない。0 より大きい場合、立体のバルコニーを作る（[8.6](#86-バルコニー)）。 |
+| `balconyDepth` | `number` | 0.5–3、任意、既定 1.5 | バルコニーの奥行き（m）。外壁の面から内側へ引っ込める量。 |
 | `slabLine` | `number` | 0–1 | 床スラブの横帯の強さ。 |
 
 #### 壁面の分類
@@ -953,6 +961,46 @@ map.setSky({ 'fog-color': '#d1e0f2', 'horizon-color': '#d1e0f2', 'fog-ground-ble
 layer.setFog(false);
 ```
 
+### 8.6 バルコニー
+
+`balconies` が `true`（既定）の場合、スタイルの `balcony` が 0 より大きい建物のバルコニーを立体で描く。プリセットでは `apartment` が該当する。
+
+**形**: PLATEAU の外形（屋根伏）はバルコニーの先端までを含む。そのため、外壁の面を手すりの面とし、その内側に `balconyDepth` だけ引っ込めて作る。外へ張り出す形にはしない。
+
+- 外壁は、バルコニーのある階で手すりの天端（階の床から 1.25 m）より上、天井（上の階の床から 0.2 m 下）より下を抜く。
+- 抜いた奥に次の形を描く。
+  - 引っ込んだ壁（窓のある面）。窓・室内・反射は外壁と同じ。
+  - 床（階の床から 0.15 m）と天井。
+  - 袖壁（連続面の両端）。
+  - 隔て板（約 6.5 m ごと、窓の列の境目）。
+- 手すりは建物ごとに、コンクリートの腰壁（4 割）か半透明のパネル（6 割）にする。
+
+**付ける場所**: 外壁の窓の配置と同じ計算で決める。
+
+- 正面（開けた面）の 2 階以上に付ける。`sunSideBalconies` が `true` のスタイルでは日当たり面だけに付ける。
+- 両端の余白の内側の、窓を並べる範囲に付ける。
+- 前面の建物にふさがれている壁では、ふさがれている高さより上で正面になる最初の階から付ける。階の途中で正面になる階には付けない。
+
+**照明**:
+
+- 建物は影を落とさないが、バルコニーの中には影を付ける。日は、手すりの天端と天井の間を通る分だけ差す。
+  - 引っ込んだ壁と床の日なた・日かげは、太陽の高さと向きから求める。
+  - 半透明の手すりは日の 35% を通す。
+- 空の光は弱める。照り返しの分を足す。
+
+**遠景**: 窓 1 枚分の区画が画面上で約 10 ピクセル未満の所では、外壁を抜かない。従来どおり、外壁の面に手すりを描く。奥の形は外壁に隠れる。
+
+**負荷**: 頂点が増える。共同住宅の多い地域では、バルコニーの三角形の数が壁とほぼ同じになる（全体で約 2 倍）。`balconies: false` または効果なし（`setEffects(false)`）、色分け表示（`debug`）では描かない。
+
+```ts
+const layer = new BuildingFacadeLayer({
+  id: 'facades',
+  source,
+  styles: { ...PRESET_STYLES, apartment: { ...PRESET_STYLES.apartment, balconyDepth: 2 } },
+});
+layer.setBalconies(false); // 外壁の面に手すりを描くだけにする
+```
+
 ---
 
 ## 9. 時刻と照明
@@ -1181,7 +1229,8 @@ function getWorkerUrl(): string | URL | undefined
 | 地形 | 標高は建物ごとに 1 つで、斜面に沿って傾かない。地形の標高はタイルの詳細度によって変わるため、調べ直すまでの間（視点の移動中など）は建物が数 m 浮いたり埋まったりすることがある。 |
 | 霞 | MapLibre と同じく、ピッチ 60° 未満・地形なし・globe 投影ではかからない。 |
 | 投影 | 動作の確認はメルカトル投影だけで行われている。globe 投影は未確認である。 |
-| 影 | 建物は影を落とさない。 |
+| 影 | 建物は影を落とさない。バルコニーの中の影だけは、手すりと天井から求めて付ける。 |
+| バルコニー | 外形の内側に引っ込めて作り、外へは張り出さない。階ごと・住戸ごとの違い（バルコニーのない階、形の違い）はない。 |
 | スタイルの数 | 1 レイヤーあたり最大 16 個。 |
 | 3D Tiles | `EXT_structural_metadata` の外部スキーマ（`schemaUri`）は読めない。暗黙的タイリングの S2 範囲は読めない。 |
 | GeoJSON | データ全体を 1 回で取得し、1 つのメッシュにする。 |

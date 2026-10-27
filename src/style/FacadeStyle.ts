@@ -1,4 +1,5 @@
 import { MAX_WALL_MATERIALS, WALL_MATERIALS, type WallMaterialName } from '../material/WallMaterials';
+import type { BalconyLayout } from '../mesh/Balconies';
 
 export type RGB = [number, number, number];
 
@@ -84,8 +85,13 @@ export interface FacadeStyle {
   openAboveRatio: number;
   /** 床スラブのライン（横帯）の強さ */
   slabLine: number;
-  /** バルコニー手すりの表現 (0–1) */
+  /** バルコニーの手すりの表現 (0–1)。0 ならバルコニーなし。立体のバルコニーは 0 より大きい場合に作る */
   balcony: number;
+  /**
+   * バルコニーの奥行き (m、0.5–3、既定 1.5)。外壁の面（建物の外形）を手すりの面とし、その内側に引っ込めて作る
+   * （PLATEAU の外形はバルコニーの先端までを含むため）
+   */
+  balconyDepth?: number;
   /** 全面ガラス（カーテンウォール） */
   curtainWall: boolean;
   // ---- 室内（インテリアマッピング）
@@ -110,6 +116,21 @@ export interface FacadeStyle {
   warmRatio: number;
   /** カテゴリ別の点灯率に掛ける係数 */
   litScale: number;
+}
+
+/** バルコニーの奥行きの既定値 (m) */
+export const DEFAULT_BALCONY_DEPTH = 1.5;
+
+/** Worker でバルコニーの形を作るための設定 */
+export function balconyLayout(s: FacadeStyle): BalconyLayout {
+  return {
+    depth: s.balcony > 0 && s.windowWidth > 0 ? (s.balconyDepth ?? DEFAULT_BALCONY_DEPTH) : 0,
+    windowSpacing: s.windowSpacing,
+    curtainWall: s.curtainWall,
+    raisedGroundFloor: s.groundFloor !== 'same',
+    sunSideOnly: s.sunSideBalconies,
+    openAboveRatio: s.openAboveRatio,
+  };
 }
 
 /** GPU に渡すときの 1 スタイルあたりのテクセル数（RGBA32F） */
