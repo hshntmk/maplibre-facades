@@ -1,6 +1,7 @@
 import { MAX_WALL_MATERIALS, WALL_MATERIALS, type WallMaterialName } from '../material/WallMaterials';
 import type { BalconyLayout } from '../mesh/Balconies';
 import { GROUND_MODES, type FrontageLayout } from '../mesh/Frontage';
+import type { PitchedRoofLayout } from '../mesh/PitchedRoof';
 
 export type RGB = [number, number, number];
 
@@ -74,6 +75,14 @@ export interface FacadeStyle {
   solarRatio: number;
   /** 屋上設備（塔屋・室外機・受水槽・キュービクル・冷却塔）の多さの倍率 (0–2)。0 で設備なし */
   rooftopEquipment: number;
+  /**
+   * 勾配屋根（切妻・寄棟・片流れ）の建物の割合 (0–1、合計 1 以下)。残りは陸屋根。外形が長方形に近い建物（外接長方形との面積比 0.85 以上）だけが対象。
+   * 屋根材は瓦・スレート・金属から選び、太陽光パネルは solarRatio の割合で南向きの面に載せる。鉄筋コンクリートの建物は勾配屋根の割合を半分にする
+   * ```ts
+   * pitchedRoofs: { gable: 0.4, hip: 0.3, shed: 0.18 } // 戸建てのプリセット
+   * ```
+   */
+  pitchedRoofs?: { gable?: number; hip?: number; shed?: number };
   /** 1 階の構成（GroundFloor を参照）。storefront / lobby は 1 階の階高を上げる */
   groundFloor: GroundFloor;
   /** 側壁（狭い隙間に面した壁）の窓 */
@@ -137,6 +146,14 @@ export function balconyLayout(s: FacadeStyle): BalconyLayout {
     sunSideOnly: s.sunSideBalconies,
     openAboveRatio: s.openAboveRatio,
   };
+}
+
+/** Worker で勾配屋根を作るための設定。勾配屋根のないスタイルは undefined */
+export function pitchedRoofLayout(s: FacadeStyle): PitchedRoofLayout | undefined {
+  const r = s.pitchedRoofs;
+  const gable = r?.gable ?? 0, hip = r?.hip ?? 0, shed = r?.shed ?? 0;
+  if (gable + hip + shed <= 0) return undefined;
+  return { gable, hip, shed, solarRatio: s.solarRatio };
 }
 
 /** Worker で 1 階の立体の部材（庇・テント・突き出し看板）を作るための設定 */

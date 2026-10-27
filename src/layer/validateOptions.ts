@@ -87,6 +87,15 @@ export function validateStyle(name: string, s: FacadeStyle): void {
   if (s.windowsPerRoom !== undefined) checkRange(p('windowsPerRoom'), s.windowsPerRoom, 1, 50);
   if (s.openPlanRatio !== undefined) checkRange(p('openPlanRatio'), s.openPlanRatio, 0, 1);
   if (s.balconyDepth !== undefined) checkRange(p('balconyDepth'), s.balconyDepth, 0.5, 3);
+  if (s.pitchedRoofs !== undefined) {
+    const r = s.pitchedRoofs;
+    if (typeof r !== 'object' || r === null) fail(`${p('pitchedRoofs')} must be an object`);
+    for (const k of Object.keys(r) as (keyof typeof r)[]) {
+      if (!['gable', 'hip', 'shed'].includes(k)) fail(`${p('pitchedRoofs')}: unknown roof shape "${k}"`);
+      checkRange(`${p('pitchedRoofs')}.${k}`, r[k], 0, 1);
+    }
+    if ((r.gable ?? 0) + (r.hip ?? 0) + (r.shed ?? 0) > 1 + 1e-9) fail(`${p('pitchedRoofs')}: ratios must add up to 1 or less`);
+  }
   checkRange(p('floorCoherence'), s.floorCoherence, 0, 1);
   checkRange(p('warmRatio'), s.warmRatio, 0, 1);
   checkRange(p('litScale'), s.litScale, 0, 10);

@@ -7,7 +7,8 @@ export const WALL_STRIDE = 24;
 // 14 clearance（前面のあき m） | 15 sunSide | 16 coverHeight（前面をふさぐ建物の高さ m） | 17 age（築年数 0–1、不明は -1）
 // 18 ground（タイル内の建物の番号。地形の標高を引く。FacadeMesh.grounds を参照）
 // 19 balconyFrom（バルコニーを付ける最初の階。0 = なし） | 20 balconyDepth（奥行き m。正 = 外壁、負 = 引っ込んだ壁、0 = なし）
-// 21 runKey・22 buildingKey（1 階の構成を決める 24 ビットの整数。Frontage.ts） | 23 entrance（1 = 入口のある連続面）
+// 21 runKey・22 buildingKey（1 階の構成を決める 24 ビットの整数。Frontage.ts） | 23 flags（1 = 入口のある連続面, 2 = 勾配屋根）
+// 勾配屋根の建物は 13 height が軒までの高さで、上端は屋根面に合わせる（切妻の妻側は三角）
 export const WALL_ATTRIBUTES = [
   { location: 0, size: 3, offset: 0 },
   { location: 1, size: 2, offset: 3 },
@@ -48,6 +49,18 @@ export const FIXTURE_ATTRIBUTES = [
   { location: 1, size: 3, offset: 3 },
   { location: 2, size: 4, offset: 6 },
   { location: 3, size: 2, offset: 10 },
+];
+
+/** 勾配屋根の頂点（floats） */
+export const PITCHED_ROOF_STRIDE = 17;
+// 0-2 pos | 3-5 normal | 6-7 uv（u: 軒に沿った面の中心からの距離, v: 軒先から棟へ m） | 8 halfEave（軒先での面の長さの半分） | 9 slope（軒先から棟までの長さ）
+// 10 part（0 = 屋根面, 1 = 鼻隠し・破風） | 11 material（ROOF_MATERIALS） | 12 color | 13 solar | 14 style | 15 category | 16 ground
+export const PITCHED_ROOF_ATTRIBUTES = [
+  { location: 0, size: 3, offset: 0 },
+  { location: 1, size: 3, offset: 3 },
+  { location: 2, size: 4, offset: 6 },
+  { location: 3, size: 4, offset: 10 },
+  { location: 4, size: 3, offset: 14 },
 ];
 
 /** 屋根の頂点（floats） */
@@ -119,6 +132,9 @@ export interface FacadeMesh {
   /** 1 階の立体の部材（庇・テント・突き出し看板） */
   fixtures: Float32Array;
   fixtureIndices: Uint32Array;
+  /** 戸建ての勾配屋根（切妻・寄棟・片流れ） */
+  pitchedRoofs: Float32Array;
+  pitchedRoofIndices: Uint32Array;
   /** 建物ごとの地形の標高を引く位置（GROUND_STRIDE ごと） */
   grounds: Float32Array;
 }

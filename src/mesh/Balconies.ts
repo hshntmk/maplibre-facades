@@ -33,10 +33,10 @@ export interface FloorLayout {
   upperHeight: number;
 }
 
-/** 階の構成（FACADE_FS の「階の構成」と同じ） */
-export function floorLayout(height: number, floorHeight: number, raisedGroundFloor: boolean): FloorLayout {
+/** 階の構成（FACADE_FS の「階の構成」と同じ）。勾配屋根の建物は height が軒までの高さで、パラペットを引かない */
+export function floorLayout(height: number, floorHeight: number, raisedGroundFloor: boolean, pitched = false): FloorLayout {
   const fh = floorHeight;
-  const topLimit = height - Math.min(2.5, Math.max(0.4, height * 0.03));
+  const topLimit = pitched ? height : height - Math.min(2.5, Math.max(0.4, height * 0.03));
   const floors = Math.max(1, Math.floor(topLimit / fh + 0.01));
   const groundHeight =
     raisedGroundFloor && floors >= 2 ? Math.min(Math.max(Math.min(fh * 1.35, fh + 1.6), fh), Math.max(fh, floors * fh - (floors - 1) * 2.6)) : fh;

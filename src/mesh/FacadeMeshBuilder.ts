@@ -4,7 +4,8 @@ import { categoryIndex, type BuildingRecord, type LngLatRing } from '../model/Bu
 import { DEFAULT_EXPOSURE_THRESHOLDS, analyzeFacades, exposureOf, type BuildingRings, type ExposureThresholds, type Point, type SegmentFacade } from './FacadeAnalyzer';
 import { buildRingBalconies, firstBalconyFloor, floorLayout, type BalconyEmitter, type BalconyLayout } from './Balconies';
 import { buildRingFrontage, keyOf, type FixtureEmitter, type FrontageLayout } from './Frontage';
-import { BALCONY_STRIDE, FIXTURE_STRIDE, GROUND_STRIDE, ROOF_STRIDE, WALL_STRIDE, type FacadeLengths, type FacadeMesh, type MeshReference } from './layout';
+import { buildPitchedRoof, planPitchedRoof, ridgeSplits, roofSurfaceHeight, type PitchedRoofLayout } from './PitchedRoof';
+import { BALCONY_STRIDE, FIXTURE_STRIDE, GROUND_STRIDE, PITCHED_ROOF_STRIDE, ROOF_STRIDE, WALL_STRIDE, type FacadeLengths, type FacadeMesh, type MeshReference } from './layout';
 import { EQUIPMENT_TYPES, generateRooftop } from './RooftopGenerator';
 
 // フットプリントから壁（窓はシェーダで描くので 1 セグメント = 1 四角形）と屋根のメッシュを作る。
@@ -80,12 +81,14 @@ export class FacadeMeshBuilder {
    * @param thresholds スタイル番号ごとの壁面分類のしきい値
    * @param balconies スタイル番号ごとのバルコニーの設定（省略時はバルコニーの形を作らない）
    * @param frontages スタイル番号ごとの 1 階の設定（省略時は庇・テント・突き出し看板を作らない）
+   * @param pitchedRoofs スタイル番号ごとの勾配屋根の割合（省略時はすべて陸屋根）
    */
   constructor(
     readonly reference: MeshReference,
     private readonly thresholds: ExposureThresholds[] = [],
     private readonly balconies: BalconyLayout[] = [],
     private readonly frontages: FrontageLayout[] = [],
+    private readonly pitchedRoofs: (PitchedRoofLayout | null | undefined)[] = [],
   ) {}
 
   private thresholdsOf(styleIndex: number): ExposureThresholds {
@@ -116,6 +119,8 @@ export class FacadeMeshBuilder {
     const balconyIdx = new GrowableU32();
     const fixtures = new GrowableF32();
     const fixtureIdx = new GrowableU32();
+    const pitched = new GrowableF32();
+    const pitchedIdx = new GrowableU32();
     const lengths: FacadeLengths = { front: 0, side: 0, party: 0, sunSide: 0 };
 
     const facades = analyzeFacades(
@@ -140,12 +145,20 @@ export class FacadeMeshBuilder {
       grounds.push(minX, minY, maxX, maxY);
       const seed = hashId(record.id);
       const cat = categoryIndex(record.category);
-      const fh = record.floorHeight ?? 3.2;
       const top = record.height;
       const bottom = record.minHeight;
       const thresholds = this.thresholdsOf(styleIndex);
       const height = top - bottom;
       const age = buildingAge(record.yearBuilt);
+      // 勾配屋根: 外壁は軒の高さまで。階高は軒までの高さを階数で割り直す（シェーダはパラペットを引かない）
+      const roofLayout = this.pitchedRoofs[styleIndex];
+      const roofPlan = roofLayout
+        ? planPitchedRoof({ id: record.id, rings: polygons, bottom, top, layout: roofLayout, concrete: record.structure === 'rc' || record.structure === 'src', solarRatio: roofLayout.solarRatio })
+        : undefined;
+      const wallHeight = roofPlan ? roofPlan.eave - bottom : height;
+      const storeys = record.storeys ?? Math.max(1, Math.round(height / (record.floorHeight ?? 3.2)));
+      const fh = roofPlan ? wallHeight / Math.min(storeys, Math.max(1, Math.floor(wallHeight / 2.4))) : (record.floorHeight ?? 3.2);
+      const wallFlags = roofPlan ? 2 : 0;
       const balconyLayout = this.balconies[styleIndex];
       const frontageLayout = this.frontages[styleIndex];
       // 1 階の構成を決める整数のキー（シェーダと Worker で同じ判定をする）
@@ -157,10 +170,23 @@ export class FacadeMeshBuilder {
         return k;
       };
       const entranceRun = chooseEntranceRun(polygons, facades[bi], thresholds);
-      const floors = balconyLayout && balconyLayout.depth > 0 ? floorLayout(height, fh, balconyLayout.raisedGroundFloor) : undefined;
+      const floors = balconyLayout && balconyLayout.depth > 0 ? floorLayout(wallHeight, fh, balconyLayout.raisedGroundFloor, !!roofPlan) : undefined;
+
+      // ---- 勾配屋根（屋上設備・航空障害灯・陸屋根の面は作らない）
+      if (roofPlan) {
+        buildPitchedRoof(roofPlan, {
+          quad: (corners, normal, uv, halfEave, slope, part, solar) => {
+            const base = pitched.length / PITCHED_ROOF_STRIDE;
+            corners.forEach(([x, y, z], c) =>
+              pitched.push(x, y, z, ...normal, uv[c][0], uv[c][1], halfEave, slope, part, roofPlan.material, roofPlan.color, solar ? 1 : 0, styleIndex, cat, ground),
+            );
+            pitchedIdx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+          },
+        });
+      }
 
       // ---- 屋上設備と航空障害灯
-      const rooftop = generateRooftop({
+      const rooftop = roofPlan ? { equipment: [], lights: [], axisAngle: 0, roofArea: 0 } : generateRooftop({
         polygons,
         height,
         storeys: record.storeys ?? Math.max(1, Math.round(height / fh)),
@@ -188,7 +214,7 @@ export class FacadeMeshBuilder {
             floors && segmentLength(i) >= 0.05 ? firstBalconyFloor(balconyLayout, ringFacades[i], height, bottom, floors, thresholds) : 0,
           );
           // 外壁と同じ形式の頂点。balconyDepth が負なら引っ込んだ壁
-          const wallQuad = (i: number, a: Point, b: Point, uA: number, uB: number, zBottom: number, zTop: number, balconyFrom: number, balconyDepth: number) => {
+          const wallQuad = (i: number, a: Point, b: Point, uA: number, uB: number, zBottom: number, zTop: number, balconyFrom: number, balconyDepth: number, zTopB = zTop) => {
             const f = ringFacades[i];
             const len = segmentLength(i);
             const [x0, y0] = ring[i];
@@ -198,10 +224,10 @@ export class FacadeMeshBuilder {
             const runSeed = hashId(`${record.id}:run${f.runId}`);
             const base = walls.length / WALL_STRIDE;
             const v = (x: number, y: number, z: number, u: number) =>
-              walls.push(x, y, z, u, z - bottom, tx, ty, f.runLength, runSeed, styleIndex, seed, fh, cat, top - bottom, f.clearance, f.sunSide ? 1 : 0, f.coverHeight - bottom, age, ground, balconyFrom, balconyDepth, runKey(f.runId), buildingKey, f.runId === entranceRun ? 1 : 0);
+              walls.push(x, y, z, u, z - bottom, tx, ty, f.runLength, runSeed, styleIndex, seed, fh, cat, wallHeight, f.clearance, f.sunSide ? 1 : 0, f.coverHeight - bottom, age, ground, balconyFrom, balconyDepth, runKey(f.runId), buildingKey, (f.runId === entranceRun ? 1 : 0) + wallFlags);
             v(a[0], a[1], zBottom, uA);
             v(b[0], b[1], zBottom, uB);
-            v(b[0], b[1], zTop, uB);
+            v(b[0], b[1], zTopB, uB);
             v(a[0], a[1], zTop, uA);
             wallIdx.push(base, base + 1, base + 2, base, base + 2, base + 3);
           };
@@ -210,7 +236,18 @@ export class FacadeMeshBuilder {
             if (len < 0.05) continue;
             const f = ringFacades[i];
             const depth = from[i] > 0 ? balconyLayout.depth : 0;
-            wallQuad(i, ring[i], ring[(i + 1) % ring.length], f.runOffset, f.runOffset + len, bottom, top, from[i], depth);
+            const a = ring[i], b = ring[(i + 1) % ring.length];
+            if (roofPlan) {
+              // 外壁の上端を屋根面に合わせる（切妻の妻側は棟の位置で分けて三角に）
+              const ts = [0, ...ridgeSplits(roofPlan, a, b), 1];
+              for (let k = 0; k + 1 < ts.length; k++) {
+                const pa: Point = [a[0] + (b[0] - a[0]) * ts[k], a[1] + (b[1] - a[1]) * ts[k]];
+                const pb: Point = [a[0] + (b[0] - a[0]) * ts[k + 1], a[1] + (b[1] - a[1]) * ts[k + 1]];
+                wallQuad(i, pa, pb, f.runOffset + len * ts[k], f.runOffset + len * ts[k + 1], bottom, roofSurfaceHeight(roofPlan, pa), from[i], depth, roofSurfaceHeight(roofPlan, pb));
+              }
+            } else {
+              wallQuad(i, a, b, f.runOffset, f.runOffset + len, bottom, top, from[i], depth);
+            }
 
             lengths[exposureOf(f.clearance, thresholds)] += len;
             if (f.sunSide) lengths.sunSide += len;
@@ -226,7 +263,7 @@ export class FacadeMeshBuilder {
             };
             ringFacades.forEach((f) => runKey(f.runId));
             buildRingFrontage(
-              { ring, facades: ringFacades, runKeys, entranceRun, layout: frontageLayout, thresholds, height, floorHeight: fh, bottom, category: cat },
+              { ring, facades: ringFacades, runKeys, entranceRun, layout: frontageLayout, thresholds, height: wallHeight, floorHeight: fh, bottom, category: cat, pitched: !!roofPlan },
               fixtureEmitter,
             );
           }
@@ -245,7 +282,8 @@ export class FacadeMeshBuilder {
           buildRingBalconies({ ring, facades: ringFacades, from, layout: balconyLayout, floors, bottom }, emitter);
         });
 
-        // ---- 屋根
+        // ---- 屋根（勾配屋根の建物は上で作った）
+        if (roofPlan) return;
         const flat: number[] = [];
         const holes: number[] = [];
         rings.forEach((ring, i) => {
@@ -273,6 +311,8 @@ export class FacadeMeshBuilder {
       balconyIndices: balconyIdx.result(),
       fixtures: fixtures.result(),
       fixtureIndices: fixtureIdx.result(),
+      pitchedRoofs: pitched.result(),
+      pitchedRoofIndices: pitchedIdx.result(),
       grounds: grounds.result(),
       facadeLengths: lengths,
     };

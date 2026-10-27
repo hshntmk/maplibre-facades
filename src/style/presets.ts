@@ -203,6 +203,7 @@ export const PRESET_STYLES: Record<string, FacadeStyle> = {
     ],
     // 屋上
     parapet: false, roofFinish: 'concrete', greenRoofRatio: 0, solarRatio: 0.25, rooftopEquipment: 0.15,
+    pitchedRoofs: { gable: 0.4, hip: 0.3, shed: 0.18 },
     groundFloor: 'house',
     windowSpacing: 3.0,
     windowWidth: 0.38,

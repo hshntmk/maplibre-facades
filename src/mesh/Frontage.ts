@@ -176,6 +176,8 @@ export interface RingFrontageInput {
   bottom: number;
   /** 用途の番号（ホテルは庇を深く） */
   category: number;
+  /** 勾配屋根（height は軒までの高さ） */
+  pitched?: boolean;
 }
 
 /** 連続面の窓の列（シェーダと同じく、日当たり面以外の小窓の間隔も考える） */
@@ -193,7 +195,7 @@ export function buildRingFrontage(input: RingFrontageInput, emit: FixtureEmitter
   if (layout.mode === GROUND_MODES.same) return;
   const n = ring.length;
   const raised = layout.mode === GROUND_MODES.storefront || layout.mode === GROUND_MODES.lobby;
-  const gfh = floorLayout(input.height, input.floorHeight, raised).groundHeight;
+  const gfh = floorLayout(input.height, input.floorHeight, raised, input.pitched).groundHeight;
   const z0 = input.bottom;
 
   for (let i = 0; i < n; i++) {

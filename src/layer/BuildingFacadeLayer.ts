@@ -9,6 +9,8 @@ import {
   EQUIPMENT_ATTRIBUTES,
   FIXTURE_ATTRIBUTES,
   FIXTURE_STRIDE,
+  PITCHED_ROOF_ATTRIBUTES,
+  PITCHED_ROOF_STRIDE,
   EQUIPMENT_STRIDE,
   LIGHT_ATTRIBUTES,
   LIGHT_STRIDE,
@@ -26,6 +28,8 @@ import {
   EQUIPMENT_FS,
   FIXTURE_FS,
   FIXTURE_VS,
+  PITCHED_ROOF_FS,
+  PITCHED_ROOF_VS,
   EQUIPMENT_VS,
   FACADE_FS,
   FACADE_VS,
@@ -43,7 +47,7 @@ import { MATERIAL_TEXTURE_SIZE, MAX_WALL_MATERIALS, WALL_MATERIALS, type Materia
 import { DEFAULT_MAX_CACHED_TILES, DEFAULT_MAX_SSE, resolveTileCacheOptions, type SourceConfig } from '../sources/SourceConfig';
 import { selectTiles } from '../sources/tiles3d/TileSelector';
 import { loadTilesets, type TileNode, type Tileset } from '../sources/tiles3d/Tileset';
-import { STYLE_TEXELS, balconyLayout, frontageLayout, packStyle, type FacadeStyle, type RGB } from '../style/FacadeStyle';
+import { STYLE_TEXELS, balconyLayout, frontageLayout, packStyle, pitchedRoofLayout, type FacadeStyle, type RGB } from '../style/FacadeStyle';
 import { DEFAULT_STYLE_RULES, PRESET_STYLES } from '../style/presets';
 import type { StyleRule } from '../style/StyleResolver';
 import { computeFog, NO_FOG, type FogUniforms } from '../terrain/Fog';
@@ -180,6 +184,7 @@ interface Programs {
   facade: Program;
   balconies: Program;
   fixtures: Program;
+  pitchedRoofs: Program;
   parapet: Program;
   roof: Program;
   equipment: Program;
@@ -208,6 +213,7 @@ interface TileGpu {
   lights: MeshBuffers;
   balconies: MeshBuffers;
   fixtures: MeshBuffers;
+  pitchedRoofs: MeshBuffers;
   /** 建物ごとの地形の標高 */
   ground: TileGround;
   /** 描画のたびに計算する、局所座標 → クリップの行列とカメラ位置 */
@@ -541,6 +547,7 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
         facade: createProgram(gl, FACADE_VS, FACADE_FS),
         balconies: createProgram(gl, BALCONY_VS, BALCONY_FS),
         fixtures: createProgram(gl, FIXTURE_VS, FIXTURE_FS),
+        pitchedRoofs: createProgram(gl, PITCHED_ROOF_VS, PITCHED_ROOF_FS),
         parapet: createProgram(gl, PARAPET_VS, PARAPET_FS),
         roof: createProgram(gl, ROOF_VS, ROOF_FS),
         equipment: createProgram(gl, EQUIPMENT_VS, EQUIPMENT_FS),
@@ -609,7 +616,7 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
     this._loaded = false;
     if (this.programs) {
       const p = this.programs;
-      for (const prog of [p.facade, p.balconies, p.fixtures, p.parapet, p.roof, p.equipment, p.lights]) gl.deleteProgram(prog.program);
+      for (const prog of [p.facade, p.balconies, p.fixtures, p.pitchedRoofs, p.parapet, p.roof, p.equipment, p.lights]) gl.deleteProgram(prog.program);
       gl.deleteTexture(p.styleTexture);
       gl.deleteTexture(p.materials.texture);
     }
@@ -752,6 +759,15 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
     forEachTile(programs.roof, (t) => {
       gl.bindVertexArray(t.roofs.vao);
       gl.drawElements(gl.TRIANGLES, t.roofs.count, gl.UNSIGNED_INT, 0);
+    });
+
+    // 戸建ての勾配屋根
+    use(programs.pitchedRoofs);
+    gl.uniform1f(programs.pitchedRoofs.uniforms.u_roofFinish, roof.finish.enabled ? 1 : 0);
+    forEachTile(programs.pitchedRoofs, (t) => {
+      if (t.pitchedRoofs.count === 0) return;
+      gl.bindVertexArray(t.pitchedRoofs.vao);
+      gl.drawElements(gl.TRIANGLES, t.pitchedRoofs.count, gl.UNSIGNED_INT, 0);
     });
 
     // 屋上設備
@@ -983,6 +999,7 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
         })),
         balconies: this._styleNames.map((name) => balconyLayout(this.styles[name])),
         frontages: this._styleNames.map((name) => frontageLayout(this.styles[name])),
+        pitchedRoofs: this._styleNames.map((name) => pitchedRoofLayout(this.styles[name]) ?? null),
       },
       // Worker（埋め込みは Blob URL）からは相対 URL を解決できないので、ページの URL を基準に絶対 URL にして渡す
       dracoWasmUrl: source.type === '3dtiles' && source.dracoWasmUrl ? new URL(source.dracoWasmUrl, document.baseURI).href : undefined,
@@ -1074,6 +1091,7 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
       lights: createPointMesh(gl, mesh.lights, LIGHT_STRIDE, LIGHT_ATTRIBUTES),
       balconies: createMesh(gl, mesh.balconies, mesh.balconyIndices, BALCONY_STRIDE, BALCONY_ATTRIBUTES),
       fixtures: createMesh(gl, mesh.fixtures, mesh.fixtureIndices, FIXTURE_STRIDE, FIXTURE_ATTRIBUTES),
+      pitchedRoofs: createMesh(gl, mesh.pitchedRoofs, mesh.pitchedRoofIndices, PITCHED_ROOF_STRIDE, PITCHED_ROOF_ATTRIBUTES),
       ground: createTileGround(gl, mesh.grounds, mesh.reference),
       matrix32: new Float32Array(16),
       eye: [0, 0, 0],
@@ -1176,7 +1194,7 @@ function uploadMaterials(gl: WebGL2RenderingContext, mat: MaterialGpu, textures:
 }
 
 function deleteTileGpu(gl: WebGL2RenderingContext, t: TileGpu): void {
-  for (const mesh of [t.walls, t.roofs, t.equipment, t.lights, t.balconies, t.fixtures]) deleteMesh(gl, mesh);
+  for (const mesh of [t.walls, t.roofs, t.equipment, t.lights, t.balconies, t.fixtures, t.pitchedRoofs]) deleteMesh(gl, mesh);
   deleteTileGround(gl, t.ground);
 }
 

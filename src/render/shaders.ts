@@ -1,6 +1,7 @@
 // GLSL ES 3.00。頂点レイアウトは mesh/layout.ts、スタイルのテクセル配置は style/FacadeStyle.ts と合わせること。
 import { AWNING_COLORS, PILLAR, SHOP, SHOP_SHARES, SIGN_COLORS } from '../mesh/Frontage';
 import { BALCONY_CEILING_DROP, BALCONY_FLOOR, BALCONY_RAIL, GROUND_TEXTURE_WIDTH } from '../mesh/layout';
+import { ROOF_COLORS } from '../mesh/PitchedRoof';
 
 const glslFloat = (v: number) => (Number.isInteger(v) ? v.toFixed(1) : String(v));
 const glslColors = (name: string, colors: number[][]) =>
@@ -656,7 +657,9 @@ void main() {
 
   // ---------------------------------------------------------------- 階の構成
   // 店舗・ロビーのある建物は 1 階を高くし、残りを上階で均等に割る
-  float topLimit = v_height - parapet(v_height);
+  // 勾配屋根の建物は v_height が軒までの高さで、パラペットがない（妻側の三角の部分は窓の範囲の外）
+  bool pitchedRoof = v_keys.z > 1.5;
+  float topLimit = pitchedRoof ? v_height : v_height - parapet(v_height);
   float floors = max(1.0, floor(topLimit / fh + 0.01));
   int ground = int(t5.x + 0.5);
   // 上階の階高が 2.6m を下回らない範囲で
@@ -717,7 +720,7 @@ void main() {
   // 正面の 1 階だけ。店・ロビー・入口などは開口の位置と大きさを置き換え、看板・シャッター・面格子などは後で重ねる
   bool frontageWall = isGround && baseExposure == 2 && hasCols && u >= 0.0 && u < usable;
   // キーは float32 にちょうど入る整数（24 ビット）。+0.5 すると 2^23 以上で丸めがずれるので、そのまま変換する
-  Frontage front = frontageOf(frontageWall ? ground : 0, uint(v_keys.x), v_keys.z > 0.5, sunSide, int(col), int(nCols), colW, margin, gfh, runLen);
+  Frontage front = frontageOf(frontageWall ? ground : 0, uint(v_keys.x), mod(v_keys.z, 2.0) > 0.5, sunSide, int(col), int(nCols), colW, margin, gfh, runLen);
   int fk = front.kind;
   bool frontGlass = fk == FRONT_SHOP || fk == FRONT_LOBBY || fk == FRONT_ENTRANCE || fk == FRONT_OPENING;
   bool frontPanel = fk == FRONT_DOOR || fk == FRONT_GARAGE;  // ガラスのない開口（ドア・シャッター）
@@ -851,6 +854,7 @@ void main() {
     // 屋上の縁から外壁を伝う縦筋（壁に沿った位置ごとに長さが違う）
     float column = vnoise(vec2(v_uv.x * 1.3, 0.5) + wseed);
     float fromTop = v_height - v_uv.y;
+    if (fromTop < 0.0) fromTop = 99.0;  // 切妻の妻側の三角（軒より上）には縁からの筋を付けない
     float topStreak = smoothstep(0.45, 0.85, column) * (1.0 - smoothstep(0.0, mix(1.5, 9.0, column), fromTop));
     topStreak *= 0.6 + 0.4 * vnoise(vec2(v_uv.x * 7.0, v_uv.y * 0.6) + wseed);
     streak = max(streak, topStreak) * mix(0.4, 1.0, detail);
@@ -1282,14 +1286,15 @@ layout(location = 2) in vec4 a_seg;     // tangent.xy, runLength, runSeed
 layout(location = 3) in vec4 a_bldg;    // style, bSeed, floorHeight, category
 layout(location = 4) in float a_height;
 layout(location = 6) in vec3 a_ext;     // ground, balconyFrom, balconyDepth
+layout(location = 7) in vec3 a_keys;    // runKey, buildingKey, flags（2 = 勾配屋根）
 ${GROUND_VS}
 out vec3 v_world;
 out float v_t;                           // 0 = 屋上面, 1 = パラペットの天端
 flat out vec3 v_normal;                  // 内向き
 flat out vec3 v_attr;                    // style, bSeed, category
 void main() {
-  // バルコニーの引っ込んだ壁にはパラペットがない（画面の外に出して描かない）
-  if (a_ext.z < 0.0) {
+  // バルコニーの引っ込んだ壁と勾配屋根の建物にはパラペットがない（画面の外に出して描かない）
+  if (a_ext.z < 0.0 || a_keys.z > 1.5) {
     gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
     return;
   }
@@ -1402,6 +1407,133 @@ void main() {
   // 夜は部屋の明かりが少し漏れる
   vec3 spill = vec3(1.0, 0.8, 0.6) * 0.012 * u_night;
   vec3 c = toLinear(albedo) * (balconyAmbient(ambient, ao) + toLinear(u_sunColor) * sun * 1.1 + spill);
+  fragColor = vec4(toDisplay(c), 1.0);
+}
+`);
+
+/** 戸建ての勾配屋根（切妻・寄棟・片流れ）。屋根材ごとの模様、棟と隅棟の役物、軒先の雨樋、南向きの面の太陽光パネル */
+export const PITCHED_ROOF_VS = /* glsl */ `#version 300 es
+${COMMON}
+uniform mat4 u_matrix;
+layout(location = 0) in vec3 a_pos;
+layout(location = 1) in vec3 a_normal;
+layout(location = 2) in vec4 a_face;     // u, v, halfEave, slope
+layout(location = 3) in vec4 a_info;     // part, material, color, solar
+layout(location = 4) in vec3 a_attr;     // style, category, ground
+${GROUND_VS}
+out vec3 v_world;
+out vec2 v_uv;
+flat out vec3 v_normal;
+flat out vec2 v_face;
+flat out vec4 v_info;
+flat out vec2 v_attr;
+void main() {
+  vec3 p = a_pos + vec3(0.0, 0.0, groundOf(a_attr.z));
+  v_world = p;
+  v_uv = a_face.xy;
+  v_face = a_face.zw;
+  v_normal = a_normal;
+  v_info = a_info;
+  v_attr = a_attr.xy;
+  gl_Position = u_matrix * vec4(p, 1.0);
+  v_fogDepth = fogDepth(gl_Position);
+}
+`;
+
+export const PITCHED_ROOF_FS = withFog(/* glsl */ `#version 300 es
+${COMMON}
+uniform float u_roofFinish;      // 0 = 太陽光パネルを描かない
+${glslColors('ROOF_TILE', ROOF_COLORS.tile)}
+${glslColors('ROOF_SLATE', ROOF_COLORS.slate)}
+${glslColors('ROOF_METAL', ROOF_COLORS.metal)}
+in vec3 v_world;
+in vec2 v_uv;
+flat in vec3 v_normal;
+flat in vec2 v_face;
+flat in vec4 v_info;
+flat in vec2 v_attr;
+out vec4 fragColor;
+void main() {
+  vec3 V = normalize(v_world - u_eye);
+  bool back = dot(v_normal, V) > 0.0;   // 下から見た面（軒裏）
+  vec3 n = back ? -v_normal : v_normal;
+  int part = int(v_info.x + 0.5), mat = int(v_info.y + 0.5), ci = int(v_info.z + 0.5);
+  int sid = int(v_attr.x + 0.5), cat = int(v_attr.y + 0.5);
+  if (u_effects < 0.5 && u_debug == 0) {
+    fragColor = vec4(plainShade(n), 1.0);
+    return;
+  }
+  if (u_debug > 0) {
+    vec3 c = u_debug == 3 ? vec3(0.35) : u_debugColors[u_debug == 1 ? cat : sid];
+    fragColor = vec4(toDisplay(toLinear(c) * (0.45 + 0.55 * max(dot(n, normalize(vec3(0.4, -0.6, 0.7))), 0.0)) * 1.4), 1.0);
+    return;
+  }
+
+  vec3 base = mat == 0 ? ROOF_TILE[ci] : mat == 1 ? ROOF_SLATE[ci] : ROOF_METAL[ci];
+  float u = v_uv.x, v = v_uv.y;
+  // 模様は 1 ピクセルが数 cm より大きくなると平均に置き換える（ちらつき防止）
+  float px = max(length(fwidth(v_uv)), 1e-4);
+  float detail = 1.0 - smoothstep(0.03, 0.09, px);
+  float shade = 1.0;
+  float gloss = 0.05;
+  vec3 c;
+  if (part == 1) {
+    // 鼻隠し・破風板: 濃い茶か白
+    vec3 trim = ci % 2 == 0 ? vec3(0.26, 0.22, 0.19) : vec3(0.82, 0.81, 0.78);
+    c = toLinear(trim) * surfaceLight(n);
+  } else if (back) {
+    // 軒裏（白い化粧板）。空の光だけ
+    c = toLinear(vec3(0.78, 0.76, 0.72)) * surfaceLight(n) * 0.6;
+  } else {
+    if (mat == 0) {
+      // 瓦: 横に並ぶ山（幅 0.3m）と段（0.25m）。釉薬瓦はつやがある
+      float tu = fract(u / 0.3), tv = fract(v / 0.25);
+      float wave = 0.5 + 0.5 * sin(tu * 6.2832);
+      float lap = smoothstep(0.82, 1.0, tv);
+      shade = mix(0.93, 0.8 + 0.2 * wave - 0.22 * lap, detail);
+      gloss = ci == 0 ? 0.08 : 0.3;
+    } else if (mat == 1) {
+      // スレート: 段（0.18m）ごとに半分ずらした板（幅 0.9m）と、板ごとの色むら
+      float row = floor(v / 0.18);
+      float su = u / 0.9 + 0.5 * mod(row, 2.0);
+      float tu = fract(su), tv = fract(v / 0.18);
+      float line = max(smoothstep(0.88, 1.0, tv), 1.0 - smoothstep(0.0, 0.025, min(tu, 1.0 - tu)));
+      float vary = 0.94 + 0.12 * hash12(vec2(floor(su), row));
+      shade = mix(0.96, (1.0 - 0.35 * line) * vary, detail);
+      gloss = 0.12;
+    } else {
+      // 金属（立平葺き）: 0.45m ごとの縦のはぜ
+      float tu = fract(u / 0.45);
+      float seam = 1.0 - smoothstep(0.0, 0.025, min(tu, 1.0 - tu));
+      shade = mix(1.02, 1.0 + 0.3 * seam, detail);
+      gloss = 0.45;
+    }
+    // 棟・隅棟の役物（棟瓦は太く）と、軒先の雨樋
+    float ridgeD = v_face.y - v;
+    float hipD = (v_face.x - v * v_normal.z) - abs(u);
+    float capW = mat == 0 ? 0.24 : 0.12;
+    float cap = 1.0 - smoothstep(capW * 0.75, capW, min(ridgeD, hipD));
+    base = mix(base, base * 0.75 + 0.03, cap);
+    shade = mix(shade, 1.0, cap);
+    float gutter = 1.0 - smoothstep(0.07, 0.1, v);
+    base = mix(base, vec3(0.3, 0.3, 0.3), gutter);
+    // 太陽光パネル: 南向きの面の中央に、軒・棟・端から 0.5m 離して並べる
+    if (v_info.w > 0.5 && u_roofFinish > 0.5) {
+      float halfAtV = v_face.x - v * v_normal.z;
+      if (v > 0.6 && v < v_face.y - 0.5 && abs(u) < min(halfAtV - 0.6, 4.5)) {
+        vec2 cell = vec2(u / 1.0, v / 1.65);
+        vec2 f = fract(cell);
+        float edge = max(1.0 - smoothstep(0.0, 0.03, min(f.x, 1.0 - f.x)), 1.0 - smoothstep(0.0, 0.02, min(f.y, 1.0 - f.y)));
+        base = mix(vec3(0.06, 0.08, 0.15), vec3(0.6, 0.62, 0.64), edge * detail);
+        shade = 1.0;
+        gloss = 0.6;
+      }
+    }
+    c = toLinear(base) * surfaceLight(n) * shade;
+    // 空の映り込み（浅い角度ほど強い）
+    float fres = pow(1.0 - clamp(dot(-V, n), 0.0, 1.0), 5.0);
+    c += skyColor(reflect(V, n)) * (1.0 + 1.0 * (1.0 - u_night)) * (0.03 + 0.6 * fres) * gloss;
+  }
   fragColor = vec4(toDisplay(c), 1.0);
 }
 `);
