@@ -7,6 +7,8 @@ import {
   BALCONY_ATTRIBUTES,
   BALCONY_STRIDE,
   EQUIPMENT_ATTRIBUTES,
+  FIXTURE_ATTRIBUTES,
+  FIXTURE_STRIDE,
   EQUIPMENT_STRIDE,
   LIGHT_ATTRIBUTES,
   LIGHT_STRIDE,
@@ -22,6 +24,8 @@ import {
   BALCONY_FS,
   BALCONY_VS,
   EQUIPMENT_FS,
+  FIXTURE_FS,
+  FIXTURE_VS,
   EQUIPMENT_VS,
   FACADE_FS,
   FACADE_VS,
@@ -39,7 +43,7 @@ import { MATERIAL_TEXTURE_SIZE, MAX_WALL_MATERIALS, WALL_MATERIALS, type Materia
 import { DEFAULT_MAX_CACHED_TILES, DEFAULT_MAX_SSE, resolveTileCacheOptions, type SourceConfig } from '../sources/SourceConfig';
 import { selectTiles } from '../sources/tiles3d/TileSelector';
 import { loadTilesets, type TileNode, type Tileset } from '../sources/tiles3d/Tileset';
-import { STYLE_TEXELS, balconyLayout, packStyle, type FacadeStyle, type RGB } from '../style/FacadeStyle';
+import { STYLE_TEXELS, balconyLayout, frontageLayout, packStyle, type FacadeStyle, type RGB } from '../style/FacadeStyle';
 import { DEFAULT_STYLE_RULES, PRESET_STYLES } from '../style/presets';
 import type { StyleRule } from '../style/StyleResolver';
 import { computeFog, NO_FOG, type FogUniforms } from '../terrain/Fog';
@@ -103,6 +107,11 @@ export interface BuildingFacadeLayerOptions {
    * 窓 1 枚分の区画が画面上で小さい（約 10 ピクセル未満）所では、従来どおり外壁の面に手すりを描く
    */
   balconies?: boolean;
+  /**
+   * 1 階の庇・テント・突き出し看板を立体で描く（既定 false）。false のときは庇とテントを外壁の面に描き、突き出し看板は描かない。
+   * 形は常に作ってあるので、切り替えてもデータの再読み込みは起きない
+   */
+  solidFixtures?: boolean;
   debug?: DebugMode;
   /** ワーカーの URL。省略時はバンドル内に埋め込んだワーカーを使う（setWorkerUrl() で全体の既定も変えられる） */
   workerUrl?: string | URL;
@@ -170,6 +179,7 @@ export const FACADE_COLORS: Readonly<Record<'party' | 'side' | 'front' | 'sunSid
 interface Programs {
   facade: Program;
   balconies: Program;
+  fixtures: Program;
   parapet: Program;
   roof: Program;
   equipment: Program;
@@ -197,6 +207,7 @@ interface TileGpu {
   equipment: MeshBuffers & { instanceCount: number };
   lights: MeshBuffers;
   balconies: MeshBuffers;
+  fixtures: MeshBuffers;
   /** 建物ごとの地形の標高 */
   ground: TileGround;
   /** 描画のたびに計算する、局所座標 → クリップの行列とカメラ位置 */
@@ -275,6 +286,7 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
   private readonly followTerrain: boolean;
   private _fog: boolean;
   private _balconies: boolean;
+  private _solidFixtures: boolean;
   /** 地形の版。地形が変わるたびに増やし、タイルの標高が古ければ引き直す */
   private terrainVersion = 0;
   private terrainTimer?: ReturnType<typeof setTimeout>;
@@ -328,6 +340,7 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
     this.followTerrain = options.terrain ?? true;
     this._fog = options.fog ?? true;
     this._balconies = options.balconies ?? true;
+    this._solidFixtures = options.solidFixtures ?? false;
   }
 
   // ---------------------------------------------------------------- state
@@ -395,6 +408,11 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
   /** バルコニーを立体で描くか */
   get balconies(): boolean {
     return this._balconies;
+  }
+
+  /** 1 階の庇・テント・突き出し看板を立体で描くか */
+  get solidFixtures(): boolean {
+    return this._solidFixtures;
   }
 
   get lightingState(): Readonly<LightingState> {
@@ -481,6 +499,14 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
     return this;
   }
 
+  /** 1 階の庇・テント・突き出し看板を立体で描くか（形は常に作ってあるので、切り替えてもデータの再読み込みは起きない） */
+  setSolidFixtures(enabled: boolean): this {
+    if (typeof enabled !== 'boolean') throw new BuildingFacadeLayerError('options', `solidFixtures must be a boolean (got ${enabled})`);
+    this._solidFixtures = enabled;
+    this.map?.triggerRepaint();
+    return this;
+  }
+
   setReflection(strength: number): this {
     if (!Number.isFinite(strength) || strength < 0 || strength > 3) {
       throw new BuildingFacadeLayerError('options', `reflection must be a number between 0 and 3 (got ${strength})`);
@@ -514,6 +540,7 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
       this.programs = {
         facade: createProgram(gl, FACADE_VS, FACADE_FS),
         balconies: createProgram(gl, BALCONY_VS, BALCONY_FS),
+        fixtures: createProgram(gl, FIXTURE_VS, FIXTURE_FS),
         parapet: createProgram(gl, PARAPET_VS, PARAPET_FS),
         roof: createProgram(gl, ROOF_VS, ROOF_FS),
         equipment: createProgram(gl, EQUIPMENT_VS, EQUIPMENT_FS),
@@ -582,7 +609,7 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
     this._loaded = false;
     if (this.programs) {
       const p = this.programs;
-      for (const prog of [p.facade, p.balconies, p.parapet, p.roof, p.equipment, p.lights]) gl.deleteProgram(prog.program);
+      for (const prog of [p.facade, p.balconies, p.fixtures, p.parapet, p.roof, p.equipment, p.lights]) gl.deleteProgram(prog.program);
       gl.deleteTexture(p.styleTexture);
       gl.deleteTexture(p.materials.texture);
     }
@@ -680,6 +707,8 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
     gl.uniform1f(f.uniforms.u_interior, this.interior ? 1 : 0);
     gl.uniform1f(f.uniforms.u_reflection, this._reflection);
     gl.uniform1f(f.uniforms.u_balconies, balconies ? 1 : 0);
+    const solidFixtures = effects && this._solidFixtures && this.debug === 'none';
+    gl.uniform1f(f.uniforms.u_solidFixtures, solidFixtures ? 1 : 0);
     const w = this._weathering;
     gl.uniform4f(f.uniforms.u_weathering, w.enabled ? w.strength : 0, w.streaks, w.grime, w.stains);
     const sd = this._surfaceDetail;
@@ -695,6 +724,18 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
       gl.bindVertexArray(t.walls.vao);
       gl.drawElements(gl.TRIANGLES, t.walls.count, gl.UNSIGNED_INT, 0);
     });
+
+    // 1 階の庇・テント・突き出し看板（立体）
+    if (solidFixtures) {
+      const p = programs.fixtures;
+      use(p);
+      gl.uniform1f(p.uniforms.u_shopOpen, L.shopOpen);
+      forEachTile(p, (t) => {
+        if (t.fixtures.count === 0) return;
+        gl.bindVertexArray(t.fixtures.vao);
+        gl.drawElements(gl.TRIANGLES, t.fixtures.count, gl.UNSIGNED_INT, 0);
+      });
+    }
 
     // パラペットの内側（外壁と同じ頂点を使う）
     if (effects) {
@@ -941,6 +982,7 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
           sideWallMax: this.styles[name].sideWallMax,
         })),
         balconies: this._styleNames.map((name) => balconyLayout(this.styles[name])),
+        frontages: this._styleNames.map((name) => frontageLayout(this.styles[name])),
       },
       // Worker（埋め込みは Blob URL）からは相対 URL を解決できないので、ページの URL を基準に絶対 URL にして渡す
       dracoWasmUrl: source.type === '3dtiles' && source.dracoWasmUrl ? new URL(source.dracoWasmUrl, document.baseURI).href : undefined,
@@ -1031,6 +1073,7 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
       equipment: createInstancedMesh(gl, unitBox(), { data: mesh.equipment, stride: EQUIPMENT_STRIDE, attributes: EQUIPMENT_ATTRIBUTES }),
       lights: createPointMesh(gl, mesh.lights, LIGHT_STRIDE, LIGHT_ATTRIBUTES),
       balconies: createMesh(gl, mesh.balconies, mesh.balconyIndices, BALCONY_STRIDE, BALCONY_ATTRIBUTES),
+      fixtures: createMesh(gl, mesh.fixtures, mesh.fixtureIndices, FIXTURE_STRIDE, FIXTURE_ATTRIBUTES),
       ground: createTileGround(gl, mesh.grounds, mesh.reference),
       matrix32: new Float32Array(16),
       eye: [0, 0, 0],
@@ -1133,7 +1176,7 @@ function uploadMaterials(gl: WebGL2RenderingContext, mat: MaterialGpu, textures:
 }
 
 function deleteTileGpu(gl: WebGL2RenderingContext, t: TileGpu): void {
-  for (const mesh of [t.walls, t.roofs, t.equipment, t.lights, t.balconies]) deleteMesh(gl, mesh);
+  for (const mesh of [t.walls, t.roofs, t.equipment, t.lights, t.balconies, t.fixtures]) deleteMesh(gl, mesh);
   deleteTileGround(gl, t.ground);
 }
 

@@ -96,7 +96,7 @@ export function meshRecords(records: StyledRecord[], obstacles: StyledRecord[], 
   }
 
   const [w, s, e, n] = Number.isFinite(stats.bounds[0]) ? stats.bounds : [0, 0, 0, 0];
-  const builder = new FacadeMeshBuilder(createReference((w + e) / 2, (s + n) / 2), config.exposureThresholds, config.balconies);
+  const builder = new FacadeMeshBuilder(createReference((w + e) / 2, (s + n) / 2), config.exposureThresholds, config.balconies, config.frontages);
   for (const { record, style } of records) builder.add(record, style);
   for (const { record, style } of obstacles) builder.add(record, style, { obstacle: true });
   const { facadeLengths, ...mesh } = builder.build();

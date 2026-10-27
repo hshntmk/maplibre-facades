@@ -175,6 +175,7 @@ export const PRESET_STYLES: Record<string, FacadeStyle> = {
     glassTint: [0.5, 0.55, 0.58],
     reflectivity: 0.12,
     roofColor: [0.5, 0.49, 0.47],
+    groundFloor: 'apartment',
     balcony: 1,
     sunSideBalconies: true,
     interior: 'residential',
@@ -202,6 +203,7 @@ export const PRESET_STYLES: Record<string, FacadeStyle> = {
     ],
     // 屋上
     parapet: false, roofFinish: 'concrete', greenRoofRatio: 0, solarRatio: 0.25, rooftopEquipment: 0.15,
+    groundFloor: 'house',
     windowSpacing: 3.0,
     windowWidth: 0.38,
     windowHeight: 0.42,

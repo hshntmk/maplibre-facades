@@ -1,5 +1,10 @@
 // GLSL ES 3.00。頂点レイアウトは mesh/layout.ts、スタイルのテクセル配置は style/FacadeStyle.ts と合わせること。
+import { AWNING_COLORS, PILLAR, SHOP, SHOP_SHARES, SIGN_COLORS } from '../mesh/Frontage';
 import { BALCONY_CEILING_DROP, BALCONY_FLOOR, BALCONY_RAIL, GROUND_TEXTURE_WIDTH } from '../mesh/layout';
+
+const glslFloat = (v: number) => (Number.isInteger(v) ? v.toFixed(1) : String(v));
+const glslColors = (name: string, colors: number[][]) =>
+  `const vec3 ${name}[${colors.length}] = vec3[${colors.length}](${colors.map((c) => `vec3(${c.map(glslFloat).join(', ')})`).join(', ')});`;
 
 /**
  * 頂点シェーダ共通: 地形の標高と霞の奥行き。
@@ -169,6 +174,41 @@ vec3 balconyAmbient(vec3 skyAmbient, float k) {
   vec3 bounce = toLinear(u_sunColor) * 0.07 * smoothstep(-0.02, 0.3, u_sunDir.z);
   return mix(skyAmbient, neutral, 0.6) * k + bounce;
 }
+
+// ---------------------------------------------------------------- 1 階（mesh/Frontage.ts と同じ判定）
+// 店のテナントや入口の位置は、Worker の立体の部材と一致するよう 32 ビット整数のハッシュで決める
+uniform float u_shopOpen;
+uint hashU(uint x) {
+  x ^= x >> 16;
+  x *= 0x7feb352dU;
+  x ^= x >> 15;
+  x *= 0x846ca68bU;
+  x ^= x >> 16;
+  return x;
+}
+uint mixKey(uint a, uint b) { return hashU(a ^ hashU(b + 0x9e3779b9U)); }
+${glslColors('SIGN_COLORS', SIGN_COLORS)}
+${glslColors('AWNING_COLORS', AWNING_COLORS)}
+const int SHOP_RETAIL = ${SHOP.retail}, SHOP_RESTAURANT = ${SHOP.restaurant}, SHOP_CONVENIENCE = ${SHOP.convenience}, SHOP_SERVICE = ${SHOP.service}, SHOP_VACANT = ${SHOP.vacant};
+int shopType(uint key) {
+  uint p = (key >> 4) % 100u;
+  return p < ${SHOP_SHARES[0]}u ? SHOP_RETAIL : p < ${SHOP_SHARES[1]}u ? SHOP_RESTAURANT : p < ${SHOP_SHARES[2]}u ? SHOP_CONVENIENCE : p < ${SHOP_SHARES[3]}u ? SHOP_SERVICE : SHOP_VACANT;
+}
+/** 店が開いているか。コンビニは 24 時間、飲食は夜遅くまで、空き店舗は閉まっている。key は店ごとの 0–1 */
+bool shopOpenNow(int shop, float key) {
+  if (shop == SHOP_VACANT) return false;
+  if (shop == SHOP_CONVENIENCE) return true;
+  float open = shop == SHOP_RESTAURANT ? min(1.0, u_shopOpen + 0.35 * u_night) : u_shopOpen;
+  return key < open * 0.95;
+}
+/** 看板の文字らしい模様。p は文字 1 つ分の枠の中の位置 (0–1)。5 × 5 のマスを key のビットで塗る */
+float signGlyph(uint key, vec2 p) {
+  if (p.x < 0.1 || p.x > 0.9 || p.y < 0.08 || p.y > 0.92) return 0.0;
+  ivec2 c = ivec2(clamp((p - vec2(0.1, 0.08)) / vec2(0.8, 0.84) * 5.0, 0.0, 4.999));
+  // 左右対称に近い形にすると文字らしく見える
+  int bit = c.y * 3 + (c.x > 2 ? 4 - c.x : c.x);
+  return float((hashU(key) >> uint(bit)) & 1u);
+}
 `;
 
 export const FACADE_VS = /* glsl */ `#version 300 es
@@ -181,6 +221,7 @@ layout(location = 3) in vec4 a_bldg;    // style, bSeed, floorHeight, category
 layout(location = 4) in float a_height;
 layout(location = 5) in vec4 a_facade;  // clearance, sunSide, coverHeight, age
 layout(location = 6) in vec3 a_ext;     // ground, balconyFrom, balconyDepth
+layout(location = 7) in vec3 a_keys;    // runKey, buildingKey, entrance
 ${GROUND_VS}
 out vec3 v_world;
 out vec2 v_uv;
@@ -189,9 +230,11 @@ flat out vec4 v_bldg;
 flat out float v_height;
 flat out vec4 v_facade;
 flat out vec2 v_balcony;
+flat out vec3 v_keys;
 void main() {
   vec3 p = a_pos + vec3(0.0, 0.0, groundOf(a_ext.x));
   v_balcony = a_ext.yz;
+  v_keys = a_keys;
   v_world = p;
   v_uv = a_uv;
   v_seg = a_seg;
@@ -206,12 +249,12 @@ void main() {
 export const FACADE_FS = withFog(/* glsl */ `#version 300 es
 ${COMMON}
 uniform float u_litRatio[16];   // カテゴリ別の点灯率
-uniform float u_shopOpen;
 uniform float u_interior;       // 1 = インテリアマッピング有効
 uniform float u_reflection;     // 反射の強さ（レイヤー全体の倍率。1 = 物理的な既定値）
 uniform vec4 u_weathering;      // 外壁のくすみ: 強さ (0 = OFF), 雨だれ, くすみ, しみ
 uniform vec2 u_surface;         // 表面の細部: 素材の強さ (0 = OFF), ガラスの歪み (0 = OFF)
 uniform float u_balconies;      // 1 = バルコニーを立体で描く
+uniform float u_solidFixtures;  // 1 = 1 階の庇・テントを立体で描く（壁には描かない）
 // 外壁の素材（material/WallMaterials.ts）: 法線 xy, ラフネス, 凹み。層 = 素材の番号
 precision highp sampler2DArray;
 uniform sampler2DArray u_materials;
@@ -228,6 +271,7 @@ flat in vec4 v_bldg;
 flat in float v_height;
 flat in vec4 v_facade;
 flat in vec2 v_balcony;         // バルコニーを付ける最初の階, 奥行き（正 = 外壁、負 = 引っ込んだ壁、0 = なし）
+flat in vec3 v_keys;            // runKey, buildingKey, entrance（1 階の構成）
 out vec4 fragColor;
 
 const vec3 WARM = vec3(1.0, 0.52, 0.20);
@@ -261,6 +305,14 @@ vec3 roomInterior(vec3 p, vec3 d, float W, float H, float D, float seed, int pal
     wallA = vec3(0.55, 0.55, 0.53);
     floorC = vec3(0.4, 0.4, 0.4);
     ceilC = vec3(0.45);
+  } else if (palette == 4) { // 飲食店
+    wallA = mix(vec3(0.62, 0.45, 0.3), vec3(0.86, 0.78, 0.66), s1);
+    floorC = vec3(0.28, 0.2, 0.14);
+    ceilC = vec3(0.4, 0.32, 0.25);
+  } else if (palette == 5) { // ロビー・エントランス
+    wallA = mix(vec3(0.84, 0.82, 0.78), vec3(0.62, 0.57, 0.52), s1 * 0.6);
+    floorC = vec3(0.62, 0.6, 0.57);
+    ceilC = vec3(0.9, 0.9, 0.88);
   } else {                   // オフィス
     wallA = mix(vec3(0.78, 0.78, 0.76), vec3(0.70, 0.72, 0.74), s1);
     floorC = mix(vec3(0.28, 0.30, 0.34), vec3(0.36, 0.33, 0.30), s2);
@@ -312,6 +364,12 @@ vec3 roomInterior(vec3 p, vec3 d, float W, float H, float D, float seed, int pal
       mask = step(fy, 0.22) * step(sofaX, fx) * step(fx, sofaX + 0.42);    // ソファ
       mask = max(mask, step(fy, 0.62) * step(0.78, fx) * step(fx, 0.96) * step(0.4, s2)); // 棚
       fc = mix(vec3(0.35, 0.28, 0.22), vec3(0.3, 0.35, 0.42), s1);
+    } else if (palette == 4) {
+      mask = step(fy, 0.28) * step(0.45, fract(q.x / 1.4));             // テーブルと椅子
+      fc = mix(vec3(0.32, 0.22, 0.15), vec3(0.5, 0.36, 0.24), s1);
+    } else if (palette == 5) {
+      mask = step(fy, 0.36) * step(abs(fx - 0.5), 0.22);                 // 受付のカウンター
+      fc = vec3(0.3, 0.22, 0.16);
     } else if (palette == 2) {
       mask = step(fy, 0.45) * step(0.25, fract(q.x / 1.6));
       fc = 0.35 + 0.5 * vec3(hash12(vec2(floor(q.x / 1.6), seed)), hash12(vec2(seed, floor(q.x / 1.6))), 0.5);
@@ -380,6 +438,149 @@ vec3 reflectedEnvironment(vec3 R, vec3 N, vec3 T, float along, float y, float cl
   return env;
 }
 
+
+// ---------------------------------------------------------------- 1 階の構成（mesh/Frontage.ts と同じ判定）
+const int FRONT_NONE = 0;      // 上の階と同じ窓
+const int FRONT_SHOP = 1;      // 店のガラス（テナントごと）
+const int FRONT_LOBBY = 2;     // ロビーのガラス（柱の間）
+const int FRONT_ENTRANCE = 3;  // 共同住宅のエントランス
+const int FRONT_OPENING = 4;   // 駐車場・駐輪場の開口（ガラスなし）
+const int FRONT_GRILLE = 5;    // 面格子の付いた窓
+const int FRONT_FENCE = 6;     // 掃き出し窓と低い塀（共同住宅の 1 階住戸）
+const int FRONT_DOOR = 7;      // 戸建ての玄関ドア
+const int FRONT_GARAGE = 8;    // ガレージのシャッター
+const int FRONT_SWEEP = 9;     // 掃き出し窓（戸建て）
+const float PILLAR = ${glslFloat(PILLAR)};
+
+struct Frontage {
+  int kind;
+  vec4 rect;       // 開口（ガラス・ドア・シャッター）の x0, x1（セル内 m）, y0, y1（階の床から m）
+  ivec2 tenant;    // 店のテナントの最初と最後の列
+  int shop;
+  float openKey;
+  bool shutter;    // 閉店中はシャッターを下ろす
+  vec2 door;       // ガラスの中のドアの左右（セル内 m）。x >= y ならなし
+  vec4 sign;       // 看板帯の u0, u1（連続面に沿った距離 m）, y0, y1。y0 >= y1 ならなし
+  int signColor;
+  uint signKey;
+  vec4 awning;     // テント（壁に描くとき）の u0, u1, y0, y1
+  int awningColor;
+  bool stripes;
+  vec4 canopy;     // 庇（壁に描くとき）の u0, u1, y0, y1
+};
+
+Frontage frontageOf(int mode, uint runKey, bool entrance, bool sunSide, int col, int cols, float colW, float margin, float gfh, float runLen) {
+  Frontage f;
+  f.kind = FRONT_NONE;
+  f.rect = vec4(0.0);
+  f.tenant = ivec2(col);
+  f.shop = SHOP_RETAIL;
+  f.openKey = 0.0;
+  f.shutter = false;
+  f.door = vec2(0.0);
+  f.sign = vec4(0.0);
+  f.signColor = 0;
+  f.signKey = 0u;
+  f.awning = vec4(0.0);
+  f.awningColor = 0;
+  f.stripes = false;
+  f.canopy = vec4(0.0);
+  if (mode == 1) {
+    // 店舗: 窓 1〜3 列分ずつのテナント。境目に柱、ガラスの上に看板（テントのある店はその上）
+    int span = min(1 + int(mixKey(runKey, 1u) % 3u), cols);
+    int offset = int(mixKey(runKey, 2u) % uint(span));
+    int index = (col + offset) / span;
+    int first = index * span - offset;
+    int start = max(first, 0), end = min(first + span - 1, cols - 1);
+    uint key = mixKey(runKey, uint(100 + index));
+    int shop = shopType(key);
+    uint awningRoll = (key >> 12) % 100u;
+    bool awning = shop == SHOP_RESTAURANT ? awningRoll < 55u : (shop == SHOP_RETAIL ? awningRoll < 30u : false);
+    float glassTop = gfh * 0.66, awningTop = glassTop + 0.55;
+    float signBottom = awning ? awningTop + 0.08 : glassTop + 0.15;
+    float signTop = min(signBottom + 0.8, gfh - 0.12);
+    float u0 = margin + float(start) * colW + PILLAR, u1 = margin + float(end + 1) * colW - PILLAR;
+    f.kind = FRONT_SHOP;
+    f.rect = vec4(col == start ? PILLAR : 0.0, col == end ? colW - PILLAR : colW, 0.05, glassTop);
+    f.tenant = ivec2(start, end);
+    f.shop = shop;
+    f.openKey = float((key >> 8) % 1000u) / 1000.0;
+    f.shutter = mixKey(key, 8u) % 100u < (shop == SHOP_VACANT ? 80u : 55u);
+    int doorCol = start + int((key >> 26) % uint(end - start + 1));
+    if (col == doorCol) {
+      float w = min(1.8, f.rect.y - f.rect.x - 0.2), c = (f.rect.x + f.rect.y) * 0.5;
+      f.door = vec2(c - w * 0.5, c + w * 0.5);
+    }
+    if (shop != SHOP_VACANT && signTop - signBottom >= 0.3) f.sign = vec4(u0, u1, signBottom, signTop);
+    f.signColor = int((key >> 16) % ${SIGN_COLORS.length}u);
+    f.signKey = key;
+    if (awning) f.awning = vec4(u0, u1, glassTop - 0.27, awningTop);
+    f.awningColor = int((key >> 20) % ${AWNING_COLORS.length}u);
+    f.stripes = ((key >> 24) & 1u) == 1u;
+  } else if (mode == 2) {
+    // ロビー: 柱の間の大きなガラス。入口のある面は中央に入口と庇
+    float glassTop = gfh * 0.8;
+    f.kind = FRONT_LOBBY;
+    f.rect = vec4(0.3, colW - 0.3, 0.05, glassTop);
+    if (entrance) {
+      int c0 = (cols - 1) / 2, c1 = cols / 2;
+      if (col >= c0 && col <= c1) {
+        float w = min(colW - 0.8, 3.2);
+        f.door = vec2(colW * 0.5 - w * 0.5, colW * 0.5 + w * 0.5);
+      }
+      f.canopy = vec4(margin + float(c0) * colW - 0.6, margin + float(c1 + 1) * colW + 0.6, glassTop + 0.12, glassTop + 0.42);
+    }
+  } else if (mode == 3) {
+    // 共同住宅: 入口のある面にエントランスと駐車場、ほかは 1 階住戸（日当たり面は掃き出し窓と塀、他は面格子）
+    int entranceCol = clamp((cols - 1) / 2 + int(mixKey(runKey, 3u) % 3u) - 1, 0, cols - 1);
+    int p0 = -1, p1 = -1;
+    if (cols >= 4 && mixKey(runKey, 4u) % 100u < 40u) {
+      int count = 1 + int(mixKey(runKey, 5u) % 2u);
+      if (float(entranceCol) < float(cols) * 0.5) { p0 = cols - count; p1 = cols - 1; }
+      else { p0 = 0; p1 = count - 1; }
+    }
+    float entryHalf = min(colW * 0.5 - 0.3, 1.6);
+    // 庇は隣の列にかかるので、入口のある面のすべての列で同じ範囲を持つ
+    if (entrance) {
+      float mid = margin + (float(entranceCol) + 0.5) * colW;
+      f.canopy = vec4(mid - entryHalf - 0.5, mid + entryHalf + 0.5, 2.65, 2.85);
+    }
+    if (entrance && col == entranceCol) {
+      f.kind = FRONT_ENTRANCE;
+      f.rect = vec4(colW * 0.5 - entryHalf, colW * 0.5 + entryHalf, 0.05, min(2.6, gfh - 0.3));
+      f.door = vec2(colW * 0.5 - min(entryHalf, 1.0), colW * 0.5 + min(entryHalf, 1.0));
+    } else if (entrance && col >= p0 && col <= p1) {
+      f.kind = FRONT_OPENING;
+      f.rect = vec4(0.3, colW - 0.3, 0.0, gfh - 0.4);
+    } else {
+      f.kind = sunSide ? FRONT_FENCE : FRONT_GRILLE;
+    }
+  } else if (mode == 4) {
+    // 戸建て: 入口のある面に玄関とガレージ、ほかは面格子（4 割）か掃き出し窓（日当たり面）
+    int doorCol = min((cols - 1) / 2 + int(mixKey(runKey, 3u) % 2u), cols - 1);
+    int garage = (cols >= 2 && runLen >= 5.5 && mixKey(runKey, 6u) % 100u < 35u) ? (doorCol == 0 ? cols - 1 : 0) : -1;
+    float a = colW >= 1.6 ? 0.35 : max(0.0, colW * 0.5 - 0.45);
+    float b = min(a + 0.9, colW);
+    if (entrance) {
+      float doorU = margin + float(doorCol) * colW;
+      f.canopy = vec4(doorU + a - 0.25, doorU + b + 0.25, 2.2, 2.3);
+    }
+    if (entrance && col == doorCol) {
+      f.kind = FRONT_DOOR;
+      f.rect = vec4(a, b, 0.0, 2.1);
+    } else if (entrance && col == garage) {
+      float w = min(colW - 0.4, 2.6);
+      f.kind = FRONT_GARAGE;
+      f.rect = vec4(colW * 0.5 - w * 0.5, colW * 0.5 + w * 0.5, 0.0, 2.2);
+    } else if (sunSide) {
+      f.kind = FRONT_SWEEP;
+    } else if (mixKey(runKey, uint(200 + col)) % 100u < 40u) {
+      f.kind = FRONT_GRILLE;
+    }
+  }
+  return f;
+}
+
 void main() {
   int sid = int(v_bldg.x + 0.5);
   float bSeed = v_bldg.y;
@@ -405,6 +606,7 @@ void main() {
   bool sunSide = v_facade.y > 0.5;
   // 壁面の分類: 0 = 界壁（隣と接する）, 1 = 側壁（狭い隙間に面する）, 2 = 正面（開けている）
   int exposure = clearance < t8.x ? 0 : clearance < t8.y ? 1 : 2;
+  int baseExposure = exposure;  // 隣の高さで開放する前（1 階の構成はこれで決める）
   // ふさいでいる隣の建物より上は開けている。隣が openAboveRatio より低ければ正面、そうでなければ 1 段階だけ開放する
   float coverHeight = v_facade.z;
   if (exposure < 2 && v_uv.y > coverHeight + 0.3) exposure = coverHeight < v_height * t8.z ? 2 : exposure + 1;
@@ -458,7 +660,7 @@ void main() {
   float floors = max(1.0, floor(topLimit / fh + 0.01));
   int ground = int(t5.x + 0.5);
   // 上階の階高が 2.6m を下回らない範囲で
-  float gfh = (ground != 0 && floors >= 2.0) ? clamp(min(fh * 1.35, fh + 1.6), fh, max(fh, floors * fh - (floors - 1.0) * 2.6)) : fh;
+  float gfh = ((ground == 1 || ground == 2) && floors >= 2.0) ? clamp(min(fh * 1.35, fh + 1.6), fh, max(fh, floors * fh - (floors - 1.0) * 2.6)) : fh;
   float upperH = floors >= 2.0 ? (floors * fh - gfh) / (floors - 1.0) : fh;
   float floorIdx, lv, cellH;
   if (v_uv.y < gfh) {
@@ -472,8 +674,6 @@ void main() {
     lv = (v_uv.y - gfh) / upperH - k;
   }
   bool isGround = floorIdx < 0.5;
-  bool storefront = isGround && ground == 1 && exposure == 2;
-  bool lobby = isGround && ground == 2 && exposure == 2;
 
   // ---------------------------------------------------------------- 壁面ごとの窓の種類
   float spacing = t0.x, ww = t0.y, wh = t0.z, sill = t0.w;
@@ -490,8 +690,6 @@ void main() {
     sill = head - wh;
   }
   if (exposure != 2 || smallWin) balcony = 0.0;
-  if (storefront) { ww = 0.9; wh = 0.74; sill = 0.04; }
-  else if (lobby) { ww = max(ww, 0.86); wh = max(wh, 0.7); sill = 0.04; }
 
   // ---------------------------------------------------------------- 連続面に沿った窓の列
   // 角（連続面の端）にだけ余白を取る。角のない閉じた面は継ぎ目なく一周させる
@@ -507,15 +705,40 @@ void main() {
   bool hasWindow = hasCols && u >= 0.0 && u < usable && v_uv.y < floors * fh;
 
   // 窓幅は寸法で固定し、余りは窓間の壁で吸収する（カーテンウォール・店舗・ロビーはセル幅に追従）
-  float winW = (curtainWall || storefront || lobby) ? ww * colW : min(winWidth, colW * 0.92);
+  float winW = curtainWall ? ww * colW : min(winWidth, colW * 0.92);
 
   // セル内の位置（m）と窓の矩形までの符号付き距離
   float cx = lu * colW, cy = lv * cellH;
   float halfW = winW * 0.5;
+  float winC = colW * 0.5;   // 窓の中心（セル内 m）
   float y0 = sill * cellH, y1 = (sill + wh) * cellH;
-  float dx = abs(cx - colW * 0.5) - halfW;
+
+  // ---------------------------------------------------------------- 1 階の構成
+  // 正面の 1 階だけ。店・ロビー・入口などは開口の位置と大きさを置き換え、看板・シャッター・面格子などは後で重ねる
+  bool frontageWall = isGround && baseExposure == 2 && hasCols && u >= 0.0 && u < usable;
+  // キーは float32 にちょうど入る整数（24 ビット）。+0.5 すると 2^23 以上で丸めがずれるので、そのまま変換する
+  Frontage front = frontageOf(frontageWall ? ground : 0, uint(v_keys.x), v_keys.z > 0.5, sunSide, int(col), int(nCols), colW, margin, gfh, runLen);
+  int fk = front.kind;
+  bool frontGlass = fk == FRONT_SHOP || fk == FRONT_LOBBY || fk == FRONT_ENTRANCE || fk == FRONT_OPENING;
+  bool frontPanel = fk == FRONT_DOOR || fk == FRONT_GARAGE;  // ガラスのない開口（ドア・シャッター）
+  if (frontGlass || frontPanel) {
+    winC = (front.rect.x + front.rect.y) * 0.5;
+    halfW = (front.rect.y - front.rect.x) * 0.5;
+    y0 = front.rect.z;
+    y1 = front.rect.w;
+    if (frontPanel) hasWindow = false;
+  } else if (fk == FRONT_FENCE || fk == FRONT_SWEEP) {
+    y0 = 0.05;  // 掃き出し窓
+  }
+  float dx = abs(cx - winC) - halfW;
   float dy = max(y0 - cy, cy - y1);
   float dist = max(dx, dy);
+  // ロビーのある建物の 1 階は石張りの基壇（御影石。色は建物ごと）
+  if (isGround && ground == 2 && exposure > 0) {
+    float pick = hash12(vec2(bSeed * 61.0, 2.2));
+    wallAlbedo = pick < 0.45 ? vec3(0.3, 0.3, 0.31) : pick < 0.8 ? vec3(0.66, 0.6, 0.52) : vec3(0.44, 0.32, 0.28);
+    material = 2;
+  }
 
   // 画面上でセルが何ピクセルか。小さいときは平均色に落としてモアレを防ぐ
   // 浅い角度では横（壁に沿った方向）だけが縮むので、横と縦を別に見る
@@ -559,12 +782,15 @@ void main() {
   vec4 t21 = styleTexel(sid, 21);  // windowsPerRoom, openPlanRatio
   float colsTotal = hasCols ? nCols : 1.0;
   float roomFloorSeed = hash12(vec2(bSeed * 457.0 + runSeed, floorIdx + 0.5));
-  bool openPlan = storefront || lobby || hash12(vec2(roomFloorSeed, 7.0)) < t21.y;
+  bool openPlan = frontGlass || hash12(vec2(roomFloorSeed, 7.0)) < t21.y;
   float span = openPlan ? colsTotal : clamp(floor(t21.x * mix(0.6, 1.5, roomFloorSeed) + 0.5), 1.0, colsTotal);
   float roomOffset = floor(hash12(vec2(roomFloorSeed, 13.0)) * span);  // 部屋の区切りの位置をフロアごとにずらす
   float roomFirst = floor((col + roomOffset) / span) * span - roomOffset;
   float roomStart = max(roomFirst, 0.0);
   float roomEnd = min(roomFirst + span - 1.0, colsTotal - 1.0);
+  // 店はテナントごと、エントランス・駐車場は列ごとに 1 部屋
+  if (fk == FRONT_SHOP) { roomStart = float(front.tenant.x); roomEnd = float(front.tenant.y); }
+  else if (fk == FRONT_ENTRANCE || fk == FRONT_OPENING) { roomStart = col; roomEnd = col; }
 
   // ---------------------------------------------------------------- 点灯
   // 点灯と照明の色は部屋ごと（ワンフロアはフロア全体）。窓 1 枚ずつの違い（カーテンなど）は winSeed で決める
@@ -575,11 +801,30 @@ void main() {
   float ratio = clamp(u_litRatio[cat] * t5.w, 0.0, 1.0);
   float litSeed = pickSeed < t4.y ? floorSeed : roomLitSeed;
   float lit = step(litSeed, ratio);
-  if (storefront) lit = step(hash12(vec2(bSeed * 41.0, floorIdx)), u_shopOpen * 0.95);
   float lightSel = hash13(vec3(roomLitSeed * 13.0, bSeed, 2.0));
   vec3 lightCol = hash12(vec2(roomLitSeed, 5.0)) < t4.z ? mix(WARM, NEUTRAL, lightSel * 0.6) : mix(COOL, NEUTRAL, lightSel * 0.5);
   lightCol *= mix(0.7, 1.25, hash12(vec2(roomLitSeed, 11.0)));
-  if (storefront) lightCol = mix(NEUTRAL, COOL, 0.4) * 1.3;
+  int palette = int(t6.a + 0.5);
+  // 1 階: 店は種類ごとの内装と照明（開店中だけ点灯）、ロビーとエントランスは夜も点灯、駐車場は蛍光灯
+  bool shopOpen = fk == FRONT_SHOP && shopOpenNow(front.shop, front.openKey);
+  if (fk == FRONT_SHOP) {
+    lit = shopOpen ? 1.0 : 0.0;
+    int sh = front.shop;
+    palette = sh == SHOP_RESTAURANT ? 4 : sh == SHOP_SERVICE ? 0 : sh == SHOP_VACANT ? 3 : 2;
+    lightCol = sh == SHOP_CONVENIENCE ? COOL * 1.7 : sh == SHOP_RESTAURANT ? mix(WARM, NEUTRAL, 0.3) * 1.1 : sh == SHOP_SERVICE ? COOL : mix(NEUTRAL, COOL, 0.4) * 1.3;
+  } else if (fk == FRONT_LOBBY) {
+    if (mixKey(uint(v_keys.y), 9u) % 100u < 85u) lit = 1.0;
+    palette = 5;
+    lightCol = mix(NEUTRAL, WARM, 0.3) * 1.1;
+  } else if (fk == FRONT_ENTRANCE) {
+    lit = 1.0;
+    palette = 5;
+    lightCol = NEUTRAL * 1.2;
+  } else if (fk == FRONT_OPENING) {
+    lit = 1.0;
+    palette = 3;
+    lightCol = COOL * 0.6;
+  }
 
   float daylight = (1.0 - u_night) * 0.55 + 0.01;
 
@@ -598,9 +843,9 @@ void main() {
       float below = y0 - cy;
       float len = mix(0.5, 2.0, hash12(vec2(winSeed, 41.0)));
       float fade = 1.0 - smoothstep(0.0, len, below);
-      float edge = min(abs(cx - (colW * 0.5 - halfW)), abs(cx - (colW * 0.5 + halfW)));
+      float edge = min(abs(cx - (winC - halfW)), abs(cx - (winC + halfW)));
       float corner = exp(-edge * edge * 30.0);
-      float sill = step(abs(cx - colW * 0.5), halfW) * 0.35;
+      float sill = step(abs(cx - winC), halfW) * 0.35;
       streak = max(corner, sill) * fade * (0.55 + 0.45 * vnoise(vec2(cx * 9.0, cy * 1.2) + wseed));
     }
     // 屋上の縁から外壁を伝う縦筋（壁に沿った位置ごとに長さが違う）
@@ -701,7 +946,7 @@ void main() {
 
   if (windowMask > 0.0) {
     // 窓内の正規化座標
-    float wx = (cx - (colW * 0.5 - halfW)) / (2.0 * halfW);
+    float wx = (cx - (winC - halfW)) / (2.0 * halfW);
     float wy = (cy - y0) / (y1 - y0);
     float roomSeed = roomLitSeed * 57.0 + bSeed;  // 部屋（室内の色・奥行き・家具）
     float paneSeed = winSeed * 57.0 + bSeed;      // 窓 1 枚（カーテン・ブラインド）
@@ -710,7 +955,6 @@ void main() {
     if (u_interior > 0.5) {
       vec3 dRoom = vec3(dot(V, T), V.z, dot(V, -N));
       float depth = t4.x * mix(0.75, 1.25, hash12(vec2(roomSeed, 3.0)));
-      int palette = storefront ? 2 : int(t6.a + 0.5);
       // 部屋は roomStart〜roomEnd の窓に面した 1 つの箱。仕切り壁は部屋の端にだけ見える
       float roomW = (roomEnd - roomStart + 1.0) * colW;
       float px = (col - roomStart) * colW + cx;
@@ -722,7 +966,7 @@ void main() {
     // カーテン（住宅）とブラインド（オフィス）。光が当たると透けて光る
     float curtainPick = hash12(vec2(paneSeed, 21.0));
     float blindPick = hash12(vec2(paneSeed, 23.0));
-    if (!storefront && curtainPick < t4.w) {
+    if (!frontGlass && curtainPick < t4.w) {
       float open = mix(0.15, 0.45, hash12(vec2(paneSeed, 25.0)));
       float folds = 0.85 + 0.15 * sin(wx * 60.0);
       float covered = max(step(wx, open * 0.5), step(1.0 - open * 0.5, wx));
@@ -730,12 +974,17 @@ void main() {
       vec3 cloth = toLinear(mix(vec3(0.85, 0.8, 0.7), vec3(0.75, 0.72, 0.8), hash12(vec2(roomSeed, 29.0))));
       vec3 curtain = cloth * folds * (lightCol * lit * 2.2 + vec3(daylight * 0.8) + 0.004);
       inside = mix(inside, curtain, covered * 0.92);
-    } else if (!storefront && blindPick < t7.y) {
+    } else if (!frontGlass && blindPick < t7.y) {
       // 下げ具合は同じ部屋でだいたいそろう
       float lowered = mix(0.2, 1.0, mix(hash12(vec2(roomSeed, 31.0)), hash12(vec2(paneSeed, 31.0)), 0.3));
       float slat = step(1.0 - lowered, wy) * step(0.3, fract(wy * (y1 - y0) * 9.0));
       vec3 blind = toLinear(vec3(0.82, 0.83, 0.82)) * (lightCol * lit * 1.8 + vec3(daylight * 0.9) + 0.004);
       inside = mix(inside, blind, slat * 0.95);
+    }
+
+    // 医院・事務所の店は、ガラスの中ほどに目隠しのフィルム
+    if (fk == FRONT_SHOP && front.shop == SHOP_SERVICE && wy > 0.3 && wy < 0.62) {
+      inside = mix(inside, toLinear(vec3(0.86)) * (lightCol * lit * 1.5 + vec3(daylight * 0.9) + 0.004), 0.85);
     }
 
     // ガラスの歪み: 1 枚ごとの取り付けの傾き（±1.4° 程度）と、複層ガラスのふくらみ・へこみ。
@@ -759,6 +1008,8 @@ void main() {
     vec3 transmitted = inside * mix(vec3(1.0), toLinear(buildingGlassTint(sid, bSeed)) * 2.0, 0.35) * interiorExposure();
     // コーティングされたガラスは映り込みにも色が付く（青・緑・ブロンズなど）
     vec3 glass = transmitted * (1.0 - reflAmt) + env * reflAmt * glassReflectTint;
+    // 駐車場・駐輪場の開口はガラスがない（奥が直接見える）
+    if (fk == FRONT_OPENING) glass = inside * interiorExposure() * 1.5;
 
     // 窓枠と方立て
     float frameW = t7.x > 0.5 ? 0.04 : 0.06;
@@ -766,12 +1017,69 @@ void main() {
     float fx = wx * mull;
     float onMullion = mull > 1.0 ? step(abs(fract(fx + 0.5) - 0.5) * (2.0 * halfW) / mull, frameW * 0.5) * step(0.5, fx) * step(fx, mull - 0.5) : 0.0;
     float onFrame = max(step(-frameW, dist), onMullion);
+    if (fk == FRONT_OPENING) onFrame = 0.0;
+    // ガラスの中のドア: 両側の枠と中央の召し合わせ、上の欄間
+    if (front.door.x < front.door.y && cx > front.door.x - 0.03 && cx < front.door.y + 0.03) {
+      float doorTop = min(y1 - 0.02, 2.3);
+      float line = min(min(abs(cx - front.door.x), abs(cx - front.door.y)), abs(cx - (front.door.x + front.door.y) * 0.5));
+      onFrame = max(onFrame, max(step(line, 0.03) * step(cy, doorTop), step(abs(cy - doorTop), 0.03)));
+    }
     vec3 frame = toLinear(t2.rgb) * wallLight;
     vec3 win = mix(glass, frame, onFrame);
+    // 閉店中の店はシャッター（横のうね。遠くでは平均の明るさ）
+    if (fk == FRONT_SHOP && !shopOpen && front.shutter) {
+      float rib = mix(0.87, 0.75 + 0.25 * smoothstep(0.3, 0.7, abs(fract(cy / 0.09) - 0.5) * 2.0), detail);
+      win = toLinear(vec3(0.6, 0.61, 0.62)) * wallLight * rib * (cy < y0 + 0.08 ? 0.7 : 1.0);
+    }
 
     color = mix(wallColor, win, windowMask);
   } else {
     color = wallColor;
+  }
+
+  // ---------------------------------------------------------------- 1 階の重ね描き（玄関ドア・ガレージ・面格子・塀・シャッターボックス）
+  if (fk != FRONT_NONE) {
+    float inPanel = 1.0 - smoothstep(-aa, aa, dist);
+    uint bk = uint(v_keys.y);
+    if (fk == FRONT_DOOR && inPanel > 0.0) {
+      // 玄関ドア: 色は建物ごと。縦長の採光窓と取っ手
+      vec3 doorColors[4] = vec3[4](vec3(0.3, 0.2, 0.13), vec3(0.55, 0.38, 0.22), vec3(0.85, 0.85, 0.82), vec3(0.25, 0.26, 0.28));
+      vec3 door = toLinear(doorColors[mixKey(bk, 11u) % 4u]) * wallLight;
+      float slit = step(abs(cx - (winC + halfW * 0.55)), 0.06) * step(0.5, cy) * step(cy, 1.9);
+      float knob = step(length(vec2(cx - (winC - halfW * 0.7), cy - 1.0)), 0.035);
+      door = mix(door, toLinear(vec3(0.3, 0.33, 0.36)) * (wallLight * 0.6 + lightCol * lit * 0.8 * u_night), slit * detail);
+      door = mix(door, toLinear(vec3(0.75, 0.7, 0.55)) * wallLight, knob * detail);
+      door = mix(door, toLinear(t2.rgb) * wallLight, step(-0.05, dist));
+      color = mix(color, door, inPanel);
+    } else if (fk == FRONT_GARAGE && inPanel > 0.0) {
+      // ガレージのシャッター: 横長のパネル
+      vec3 garageColors[3] = vec3[3](vec3(0.85, 0.85, 0.83), vec3(0.62, 0.63, 0.64), vec3(0.4, 0.3, 0.22));
+      float rib = mix(0.88, 0.82 + 0.18 * step(0.12, fract(cy / 0.25)), detail);
+      vec3 garage = toLinear(garageColors[mixKey(bk, 12u) % 3u]) * wallLight * rib;
+      garage = mix(garage, toLinear(t2.rgb) * wallLight * 0.8, step(-0.06, dist));
+      color = mix(color, garage, inPanel);
+    } else if (fk == FRONT_GRILLE && hasWindow && dist < 0.04) {
+      // 面格子: 窓より少し大きいアルミの縦格子
+      float bar = 1.0 - step(0.013, abs(fract((cx - winC) / 0.1 + 0.5) - 0.5) * 0.1);
+      float rail = step(min(abs(cy - (y0 - 0.02)), abs(cy - (y1 + 0.02))), 0.025);
+      float g = mix(0.3, max(bar, rail), detail);
+      color = mix(color, toLinear(vec3(0.72, 0.73, 0.73)) * wallLight, g);
+    } else if (fk == FRONT_FENCE && cy < 1.0) {
+      // 1 階住戸の専用庭の塀: 生け垣かアルミの縦格子
+      bool hedge = mixKey(bk, 13u) % 100u < 50u;
+      if (hedge) {
+        float top = 0.9 + 0.08 * vnoise(vec2(v_uv.x * 3.0, 1.0));
+        float n = mix(0.5, vnoise(vec2(v_uv.x * 6.0, cy * 6.0)), detail);
+        if (cy < top) color = toLinear(mix(vec3(0.16, 0.28, 0.12), vec3(0.28, 0.42, 0.18), n)) * wallLight * mix(0.6, 1.0, cy);
+      } else {
+        float slat = mix(0.7, step(0.35, fract(v_uv.x / 0.15)), detail);
+        color = toLinear(vec3(0.32, 0.27, 0.22)) * wallLight * mix(0.45, 1.0, slat);
+      }
+    }
+    // シャッターのある店（テントのない店）は、ガラスの上にシャッターボックス
+    if (fk == FRONT_SHOP && front.shutter && front.awning.w <= 0.0 && dx < 0.0 && cy > y1 && cy < y1 + 0.22) {
+      color = toLinear(vec3(0.55, 0.56, 0.57)) * wallLight;
+    }
   }
 
   // バルコニーの手すり（住宅、2 階以上）。立体で描くときは、外壁の面が手すりそのもの
@@ -798,10 +1106,10 @@ void main() {
   // 遠景は平均色に置き換える（窓率 × 点灯率）
   if (detail < 1.0) {
     // 窓が占める割合。縦方向が見分けられる間は、窓の高さの帯だけを平均色にする（窓の上下の壁は残す）
-    bool onFloors = hasCols && v_uv.y < floors * fh;
+    bool onFloors = hasCols && v_uv.y < floors * fh && !frontPanel && !(fk == FRONT_SHOP && !shopOpen && front.shutter);
     float rowAa = fwy * 0.75;
     float inWindowRow = 1.0 - smoothstep(-rowAa, rowAa, max(y0 - cy, cy - y1));
-    float coverage = onFloors ? (winW / colW) * mix(wh, inWindowRow, detailY) : 0.0;
+    float coverage = onFloors ? (2.0 * halfW / colW) * mix((y1 - y0) / cellH, inWindowRow, detailY) : 0.0;
     // 点灯は近景と同じもの（部屋ごと）を使い、近づいたときに点灯の模様が変わらないようにする。
     // 区画が 1 ピクセルより小さいと模様がちらつくので、そこではフロアごとの期待値（フロア単位で点灯する用途は階ごとの縞）にする
     float floorLit = mix(ratio, step(floorSeed, ratio), t4.y);
@@ -814,6 +1122,46 @@ void main() {
     vec3 avgGlass = avgInside * (1.0 - reflAmt) + skyRadiance(R) * 0.8 * reflAmt * glassReflectTint;
     vec3 avg = mix(wallColor, avgGlass, coverage);
     color = mix(avg, color, detail);
+  }
+
+  // ---------------------------------------------------------------- 1 階の看板・テント・庇（遠景でも描く）
+  if (fk != FRONT_NONE) {
+    float ru = v_uv.x;
+    vec4 sg = front.sign;
+    if (sg.z < sg.w && ru > sg.x && ru < sg.y && cy > sg.z && cy < sg.w) {
+      // 看板帯: 地の色に文字らしい模様。夜は開店中の店の看板が光る
+      vec3 bg = SIGN_COLORS[front.signColor];
+      float su = ru - sg.x, len = sg.y - sg.x, sh = sg.w - sg.z, sv = (cy - sg.z) / sh;
+      float lw = sh * 0.56;
+      float count = clamp(floor(len * 0.6 / lw), 1.0, 8.0);
+      float first = (len - count * lw) * 0.5;
+      float li = floor((su - first) / lw);
+      bool inText = li >= 0.0 && li < count && sv > 0.19 && sv < 0.81;
+      float glyph = inText ? signGlyph(front.signKey ^ uint(li + 1.0), vec2(fract((su - first) / lw), (sv - 0.19) / 0.62)) : 0.0;
+      glyph = mix(inText ? 0.3 : 0.0, glyph, detail);
+      vec3 ink = dot(bg, vec3(0.3, 0.59, 0.11)) > 0.55 ? vec3(0.1, 0.1, 0.12) : vec3(0.97);
+      float border = step(min(min(su, len - su), min(cy - sg.z, sg.w - cy)), 0.04);
+      vec3 face = mix(mix(bg, ink, glyph), bg * 0.6, border);
+      color = toLinear(face) * (wallLight + vec3(1.6) * (shopOpen ? u_night : 0.0));
+    }
+    vec4 aw = front.awning;
+    if (u_solidFixtures < 0.5 && aw.z < aw.w && ru > aw.x && ru < aw.y && cy > aw.z) {
+      // テント（壁に描くとき）: 斜めの面と、下端が波形の垂れ
+      float su = ru - aw.x;
+      float valanceTop = aw.z + 0.22;
+      if (cy < aw.w && cy > aw.z + 0.035 * (1.0 - abs(sin(su * 3.14159 / 0.3)))) {
+        vec3 ac = AWNING_COLORS[front.awningColor];
+        if (front.stripes && fract(su / 0.5) < 0.5) ac = vec3(0.9, 0.9, 0.88);
+        vec3 light = cy > valanceTop ? surfaceLight(normalize(N + vec3(0.0, 0.0, 1.0))) * mix(0.85, 1.0, (cy - valanceTop) / (aw.w - valanceTop)) : wallLight * 0.9;
+        color = toLinear(ac) * light;
+      }
+    }
+    vec4 cn = front.canopy;
+    if (u_solidFixtures < 0.5 && cn.z < cn.w && ru > cn.x && ru < cn.y) {
+      // 庇（壁に描くとき）: 小口と、その下の影
+      if (cy > cn.z && cy < cn.w) color = toLinear(vec3(0.5, 0.5, 0.5)) * wallLight * (cy > cn.w - 0.05 ? 1.2 : 1.0);
+      else if (cy < cn.z && cy > cn.z - 0.6) color *= mix(0.55, 1.0, (cn.z - cy) / 0.6);
+    }
   }
 
   // 微分（素材のミップなど）を求め終えてから抜く
@@ -1054,6 +1402,72 @@ void main() {
   // 夜は部屋の明かりが少し漏れる
   vec3 spill = vec3(1.0, 0.8, 0.6) * 0.012 * u_night;
   vec3 c = toLinear(albedo) * (balconyAmbient(ambient, ao) + toLinear(u_sunColor) * sun * 1.1 + spill);
+  fragColor = vec4(toDisplay(c), 1.0);
+}
+`);
+
+/** 1 階の立体の部材（庇・テント・突き出し看板）。色と開店の判定は外壁の FRONTAGE と同じ */
+export const FIXTURE_VS = /* glsl */ `#version 300 es
+${COMMON}
+uniform mat4 u_matrix;
+layout(location = 0) in vec3 a_pos;
+layout(location = 1) in vec3 a_normal;
+layout(location = 2) in vec4 a_info;     // uv, part, color
+layout(location = 3) in vec2 a_shop;     // 店の種類 + openKey, ground
+${GROUND_VS}
+out vec3 v_world;
+out vec2 v_uv;
+flat out vec3 v_normal;
+flat out vec3 v_attr;                    // part, color, shop
+void main() {
+  vec3 p = a_pos + vec3(0.0, 0.0, groundOf(a_shop.y));
+  v_world = p;
+  v_uv = a_info.xy;
+  v_normal = a_normal;
+  v_attr = vec3(a_info.zw, a_shop.x);
+  gl_Position = u_matrix * vec4(p, 1.0);
+  v_fogDepth = fogDepth(gl_Position);
+}
+`;
+
+export const FIXTURE_FS = withFog(/* glsl */ `#version 300 es
+${COMMON}
+in vec3 v_world;
+in vec2 v_uv;
+flat in vec3 v_normal;
+flat in vec3 v_attr;
+out vec4 fragColor;
+void main() {
+  int part = int(v_attr.x + 0.5);
+  float colorKey = v_attr.y;
+  int shop = int(floor(v_attr.z));
+  float openKey = fract(v_attr.z);
+  vec3 V = normalize(v_world - u_eye);
+  bool back = dot(v_normal, V) > 0.0;
+  vec3 n = back ? -v_normal : v_normal;
+  vec3 albedo;
+  float glow = 0.0;
+  if (part <= 1) {
+    // テント（斜めの面・垂れ・側面）。縞は u に沿って 0.5m ごと
+    albedo = AWNING_COLORS[int(floor(colorKey))];
+    if (fract(colorKey) > 0.25 && fract(v_uv.x / 0.5) < 0.5) albedo = vec3(0.9, 0.9, 0.88);
+  } else if (part == 2) {
+    albedo = vec3(0.55, 0.55, 0.54);  // 庇（コンクリート・金属）
+  } else if (part == 3) {
+    // 突き出し看板: 縦に文字が並ぶ。夜は開店中なら光る
+    albedo = SIGN_COLORS[int(colorKey + 0.5)];
+    vec3 ink = dot(albedo, vec3(0.3, 0.59, 0.11)) > 0.55 ? vec3(0.1, 0.1, 0.12) : vec3(0.97);
+    float cell = v_uv.y * 4.0;
+    float glyph = signGlyph(uint(openKey * 1000.0) * 7u + uint(cell) + 1u, vec2((v_uv.x - 0.1) / 0.8, fract(cell)));
+    float border = step(min(min(v_uv.x, 1.0 - v_uv.x), min(v_uv.y, 1.0 - v_uv.y)), 0.05);
+    albedo = mix(mix(albedo, ink, glyph), albedo * 0.6, border);
+    glow = shopOpenNow(shop, openKey) ? u_night : 0.0;
+  } else {
+    albedo = vec3(0.32, 0.33, 0.34);  // 看板の縁
+  }
+  vec3 c = toLinear(albedo) * (surfaceLight(n) + vec3(1.6) * glow);
+  // テントの裏側（下から見た面）は暗い
+  if (part == 0 && back) c *= 0.5;
   fragColor = vec4(toDisplay(c), 1.0);
 }
 `);

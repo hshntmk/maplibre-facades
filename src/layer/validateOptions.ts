@@ -63,7 +63,9 @@ export function validateStyle(name: string, s: FacadeStyle): void {
   checkPalette(p('glassTints'), s.glassTints, GLASS_PALETTE_SIZE);
   checkRange(p('reflectivity'), s.reflectivity, 0, 1);
   checkColor(p('roofColor'), s.roofColor);
-  if (!['same', 'storefront', 'lobby'].includes(s.groundFloor)) fail(`${p('groundFloor')} must be 'same', 'storefront' or 'lobby'`);
+  if (!['same', 'storefront', 'lobby', 'apartment', 'house'].includes(s.groundFloor)) {
+    fail(`${p('groundFloor')} must be 'same', 'storefront', 'lobby', 'apartment' or 'house'`);
+  }
   if (!['none', 'small', 'same'].includes(s.sideWindows)) fail(`${p('sideWindows')} must be 'none', 'small' or 'same'`);
   if (typeof s.sunSideBalconies !== 'boolean') fail(`${p('sunSideBalconies')} must be a boolean`);
   checkRange(p('partyWallMax'), s.partyWallMax, 0, MAX_CLEARANCE);
@@ -102,6 +104,7 @@ export function validateLayerOptions(opts: {
   terrain?: unknown;
   fog?: unknown;
   balconies?: unknown;
+  solidFixtures?: unknown;
   workers?: unknown;
   debug?: unknown;
 }): void {
@@ -142,6 +145,7 @@ export function validateLayerOptions(opts: {
   if (opts.terrain !== undefined && typeof opts.terrain !== 'boolean') fail('terrain must be a boolean');
   if (opts.fog !== undefined && typeof opts.fog !== 'boolean') fail('fog must be a boolean');
   if (opts.balconies !== undefined && typeof opts.balconies !== 'boolean') fail('balconies must be a boolean');
+  if (opts.solidFixtures !== undefined && typeof opts.solidFixtures !== 'boolean') fail('solidFixtures must be a boolean');
   if (opts.workers !== undefined && (!Number.isInteger(opts.workers) || (opts.workers as number) < 1 || (opts.workers as number) > 16)) fail(`workers must be an integer between 1 and 16 (got ${JSON.stringify(opts.workers)})`);
   if (opts.debug !== undefined && !(DEBUG_MODES as readonly unknown[]).includes(opts.debug)) fail(`unknown debug mode: ${opts.debug}`);
 }

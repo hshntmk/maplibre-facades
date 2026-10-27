@@ -1,9 +1,10 @@
 import earcut from 'earcut';
 import { mercatorX, mercatorY, meterInMercator } from '../math/mercator';
 import { categoryIndex, type BuildingRecord, type LngLatRing } from '../model/BuildingRecord';
-import { DEFAULT_EXPOSURE_THRESHOLDS, analyzeFacades, exposureOf, type BuildingRings, type ExposureThresholds, type Point } from './FacadeAnalyzer';
+import { DEFAULT_EXPOSURE_THRESHOLDS, analyzeFacades, exposureOf, type BuildingRings, type ExposureThresholds, type Point, type SegmentFacade } from './FacadeAnalyzer';
 import { buildRingBalconies, firstBalconyFloor, floorLayout, type BalconyEmitter, type BalconyLayout } from './Balconies';
-import { BALCONY_STRIDE, GROUND_STRIDE, ROOF_STRIDE, WALL_STRIDE, type FacadeLengths, type FacadeMesh, type MeshReference } from './layout';
+import { buildRingFrontage, keyOf, type FixtureEmitter, type FrontageLayout } from './Frontage';
+import { BALCONY_STRIDE, FIXTURE_STRIDE, GROUND_STRIDE, ROOF_STRIDE, WALL_STRIDE, type FacadeLengths, type FacadeMesh, type MeshReference } from './layout';
 import { EQUIPMENT_TYPES, generateRooftop } from './RooftopGenerator';
 
 // フットプリントから壁（窓はシェーダで描くので 1 セグメント = 1 四角形）と屋根のメッシュを作る。
@@ -78,11 +79,13 @@ export class FacadeMeshBuilder {
   /**
    * @param thresholds スタイル番号ごとの壁面分類のしきい値
    * @param balconies スタイル番号ごとのバルコニーの設定（省略時はバルコニーの形を作らない）
+   * @param frontages スタイル番号ごとの 1 階の設定（省略時は庇・テント・突き出し看板を作らない）
    */
   constructor(
     readonly reference: MeshReference,
     private readonly thresholds: ExposureThresholds[] = [],
     private readonly balconies: BalconyLayout[] = [],
+    private readonly frontages: FrontageLayout[] = [],
   ) {}
 
   private thresholdsOf(styleIndex: number): ExposureThresholds {
@@ -111,6 +114,8 @@ export class FacadeMeshBuilder {
     const grounds = new GrowableF32();
     const balconies = new GrowableF32();
     const balconyIdx = new GrowableU32();
+    const fixtures = new GrowableF32();
+    const fixtureIdx = new GrowableU32();
     const lengths: FacadeLengths = { front: 0, side: 0, party: 0, sunSide: 0 };
 
     const facades = analyzeFacades(
@@ -142,6 +147,16 @@ export class FacadeMeshBuilder {
       const height = top - bottom;
       const age = buildingAge(record.yearBuilt);
       const balconyLayout = this.balconies[styleIndex];
+      const frontageLayout = this.frontages[styleIndex];
+      // 1 階の構成を決める整数のキー（シェーダと Worker で同じ判定をする）
+      const buildingKey = keyOf(record.id);
+      const runKeys = new Map<number, number>();
+      const runKey = (runId: number) => {
+        let k = runKeys.get(runId);
+        if (k === undefined) runKeys.set(runId, (k = keyOf(`${record.id}:run${runId}`)));
+        return k;
+      };
+      const entranceRun = chooseEntranceRun(polygons, facades[bi], thresholds);
       const floors = balconyLayout && balconyLayout.depth > 0 ? floorLayout(height, fh, balconyLayout.raisedGroundFloor) : undefined;
 
       // ---- 屋上設備と航空障害灯
@@ -183,7 +198,7 @@ export class FacadeMeshBuilder {
             const runSeed = hashId(`${record.id}:run${f.runId}`);
             const base = walls.length / WALL_STRIDE;
             const v = (x: number, y: number, z: number, u: number) =>
-              walls.push(x, y, z, u, z - bottom, tx, ty, f.runLength, runSeed, styleIndex, seed, fh, cat, top - bottom, f.clearance, f.sunSide ? 1 : 0, f.coverHeight - bottom, age, ground, balconyFrom, balconyDepth);
+              walls.push(x, y, z, u, z - bottom, tx, ty, f.runLength, runSeed, styleIndex, seed, fh, cat, top - bottom, f.clearance, f.sunSide ? 1 : 0, f.coverHeight - bottom, age, ground, balconyFrom, balconyDepth, runKey(f.runId), buildingKey, f.runId === entranceRun ? 1 : 0);
             v(a[0], a[1], zBottom, uA);
             v(b[0], b[1], zBottom, uB);
             v(b[0], b[1], zTop, uB);
@@ -199,6 +214,21 @@ export class FacadeMeshBuilder {
 
             lengths[exposureOf(f.clearance, thresholds)] += len;
             if (f.sunSide) lengths.sunSide += len;
+          }
+
+          if (frontageLayout) {
+            const fixtureEmitter: FixtureEmitter = {
+              quad: (part, corners, normal, uv, color, shop) => {
+                const base = fixtures.length / FIXTURE_STRIDE;
+                corners.forEach(([x, y, z], c) => fixtures.push(x, y, z, ...normal, uv[c][0], uv[c][1], part, color, shop, ground));
+                fixtureIdx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+              },
+            };
+            ringFacades.forEach((f) => runKey(f.runId));
+            buildRingFrontage(
+              { ring, facades: ringFacades, runKeys, entranceRun, layout: frontageLayout, thresholds, height, floorHeight: fh, bottom, category: cat },
+              fixtureEmitter,
+            );
           }
 
           if (!floors || !from.some((k) => k > 0)) return;
@@ -241,10 +271,37 @@ export class FacadeMeshBuilder {
       lights: lights.result(),
       balconies: balconies.result(),
       balconyIndices: balconyIdx.result(),
+      fixtures: fixtures.result(),
+      fixtureIndices: fixtureIdx.result(),
       grounds: grounds.result(),
       facadeLengths: lengths,
     };
   }
+}
+
+/**
+ * 入口のある連続面: 正面（開けた面）のうち、前面のあき（道路側ほど広い）と長さで最も表らしいもの。なければ -1
+ */
+function chooseEntranceRun(polygons: BuildingRings, facades: SegmentFacade[][][], thresholds: ExposureThresholds): number {
+  const scores = new Map<number, number>();
+  polygons.forEach((rings, pi) =>
+    facades[pi][0].forEach((f, i) => {
+      const [x0, y0] = rings[0][i];
+      const [x1, y1] = rings[0][(i + 1) % rings[0].length];
+      if (Math.hypot(x1 - x0, y1 - y0) < 0.05 || exposureOf(f.clearance, thresholds) !== 'front') return;
+      const score = Math.min(f.clearance, 40) + 0.5 * Math.min(Math.abs(f.runLength), 30);
+      scores.set(f.runId, Math.max(scores.get(f.runId) ?? -Infinity, score));
+    }),
+  );
+  let best = -1;
+  let bestScore = -Infinity;
+  for (const [id, score] of scores) {
+    if (score > bestScore) {
+      best = id;
+      bestScore = score;
+    }
+  }
+  return best;
 }
 
 /** 築年数を 0（新しい）〜1（50 年以上）に。建築年が不明なら -1（シェーダで建物ごとにばらつかせる） */

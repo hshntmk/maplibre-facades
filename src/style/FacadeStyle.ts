@@ -1,5 +1,6 @@
 import { MAX_WALL_MATERIALS, WALL_MATERIALS, type WallMaterialName } from '../material/WallMaterials';
 import type { BalconyLayout } from '../mesh/Balconies';
+import { GROUND_MODES, type FrontageLayout } from '../mesh/Frontage';
 
 export type RGB = [number, number, number];
 
@@ -11,7 +12,12 @@ export const WALL_PALETTE_SIZE = 6;
 export const GLASS_PALETTE_SIZE = 4;
 
 export type InteriorPalette = 'office' | 'residential' | 'shop' | 'warehouse';
-export type GroundFloor = 'same' | 'storefront' | 'lobby';
+/**
+ * 1 階の構成。same: 上の階と同じ / storefront: テナントごとの店（看板・シャッター・入口・テント）/
+ * lobby: 柱と石張りの基壇のロビー、入口と庇 / apartment: 共同住宅のエントランス・駐車場・1 階住戸の面格子や塀 /
+ * house: 戸建ての玄関・ガレージ・面格子。storefront と lobby は 1 階の階高を上げる
+ */
+export type GroundFloor = keyof typeof GROUND_MODES;
 /** 屋上の基本の仕上げ。concrete: コンクリート押さえ（目地）/ membrane: 防水シート（継ぎ目）/ skylights: 天窓の列（倉庫・工場） */
 export type RoofFinish = 'concrete' | 'membrane' | 'skylights';
 
@@ -68,7 +74,7 @@ export interface FacadeStyle {
   solarRatio: number;
   /** 屋上設備（塔屋・室外機・受水槽・キュービクル・冷却塔）の多さの倍率 (0–2)。0 で設備なし */
   rooftopEquipment: number;
-  /** 1 階の扱い。storefront / lobby は 1 階の階高を上げる */
+  /** 1 階の構成（GroundFloor を参照）。storefront / lobby は 1 階の階高を上げる */
   groundFloor: GroundFloor;
   /** 側壁（狭い隙間に面した壁）の窓 */
   sideWindows: SideWindows;
@@ -127,16 +133,27 @@ export function balconyLayout(s: FacadeStyle): BalconyLayout {
     depth: s.balcony > 0 && s.windowWidth > 0 ? (s.balconyDepth ?? DEFAULT_BALCONY_DEPTH) : 0,
     windowSpacing: s.windowSpacing,
     curtainWall: s.curtainWall,
-    raisedGroundFloor: s.groundFloor !== 'same',
+    raisedGroundFloor: s.groundFloor === 'storefront' || s.groundFloor === 'lobby',
     sunSideOnly: s.sunSideBalconies,
     openAboveRatio: s.openAboveRatio,
+  };
+}
+
+/** Worker で 1 階の立体の部材（庇・テント・突き出し看板）を作るための設定 */
+export function frontageLayout(s: FacadeStyle): FrontageLayout {
+  return {
+    mode: GROUND_MODES[s.groundFloor],
+    windowSpacing: s.windowSpacing,
+    windowWidth: s.windowWidth,
+    curtainWall: s.curtainWall,
+    sunSideOnly: s.sunSideBalconies,
   };
 }
 
 /** GPU に渡すときの 1 スタイルあたりのテクセル数（RGBA32F） */
 export const STYLE_TEXELS = 10 + WALL_PALETTE_SIZE + GLASS_PALETTE_SIZE + 2;
 
-const GROUND: Record<GroundFloor, number> = { same: 0, storefront: 1, lobby: 2 };
+const GROUND: Record<GroundFloor, number> = GROUND_MODES;
 const INTERIOR: Record<InteriorPalette, number> = { office: 0, residential: 1, shop: 2, warehouse: 3 };
 const SIDE: Record<SideWindows, number> = { none: 0, small: 1, same: 2 };
 const FINISH: Record<RoofFinish, number> = { concrete: 0, membrane: 1, skylights: 2 };

@@ -224,6 +224,7 @@ requestAnimationFrame(tick);
 $<HTMLSelectElement>('effects').addEventListener('change', (e) => layer.setEffects((e.target as HTMLSelectElement).value === 'on'));
 $<HTMLInputElement>('interior').addEventListener('change', (e) => layer.setInterior((e.target as HTMLInputElement).checked));
 $<HTMLInputElement>('balconies').addEventListener('change', (e) => layer.setBalconies((e.target as HTMLInputElement).checked));
+$<HTMLInputElement>('solid-fixtures').addEventListener('change', (e) => layer.setSolidFixtures((e.target as HTMLInputElement).checked));
 const checked = (id: string) => $<HTMLInputElement>(id).checked;
 const updateRoof = () =>
   layer.setRoof({

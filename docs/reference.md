@@ -40,6 +40,7 @@
   - 8.4 `DebugMode`
   - 8.5 地形と霞
   - 8.6 バルコニー
+  - 8.7 1 階の構成
 - 9\. 時刻と照明
   - 9.1 `computeLighting()`
   - 9.2 `LightingState`
@@ -144,6 +145,7 @@ new BuildingFacadeLayer(options: BuildingFacadeLayerOptions)
 | `terrain` | `boolean` | `true` | MapLibre の地形があるとき、建物を地面の標高に載せる。[8.5](#85-地形と霞) を参照。 |
 | `fog` | `boolean` | `true` | MapLibre の sky の霞を建物にもかける。[8.5](#85-地形と霞) を参照。 |
 | `balconies` | `boolean` | `true` | バルコニーを立体で描く。[8.6](#86-バルコニー) を参照。 |
+| `solidFixtures` | `boolean` | `false` | 1 階の庇・テント・突き出し看板を立体で描く。[8.7](#87-1-階の構成) を参照。 |
 | `debug` | `DebugMode` | `'none'` | 色分け表示。[8.4](#84-debugmode) を参照。 |
 | `workerUrl` | `string \| URL` | `undefined` | Worker のスクリプトの URL。[12](#12-worker) を参照。 |
 | `workers` | `number` | CPU のコア数の半分（1–4） | 3D Tiles の処理に使う Worker の数。範囲は 1–16 の整数。GeoJSON では常に 1。[12.3](#123-worker-のプール) を参照。 |
@@ -169,6 +171,7 @@ new BuildingFacadeLayer(options: BuildingFacadeLayerOptions)
 | `surfaceDetail` | `Readonly<ResolvedSurfaceDetailOptions>` | 既定値を補完した表面の細部の設定。 |
 | `fog` | `boolean` | 建物に霞をかけるかどうか。 |
 | `balconies` | `boolean` | バルコニーを立体で描くかどうか。 |
+| `solidFixtures` | `boolean` | 1 階の庇・テント・突き出し看板を立体で描くかどうか。 |
 | `lightingState` | `Readonly<LightingState>` | 現在の時刻から計算した照明。[9.2](#92-lightingstate) を参照。 |
 
 ### 2.4 メソッド
@@ -202,6 +205,10 @@ layer.setTimeOfDay(18.5);
 #### `setBalconies(enabled: boolean): this`
 
 バルコニーを立体で描くかどうかを設定する。形は Worker で常に作ってあるため、切り替えてもデータの再読み込みは起きない。詳細は [8.6](#86-バルコニー) を参照。`enabled` が真偽値でない場合、例外を送出する。
+
+#### `setSolidFixtures(enabled: boolean): this`
+
+1 階の庇・テント・突き出し看板を立体で描くかどうかを設定する。`false` の場合、庇とテントは外壁の面に描き、突き出し看板は描かない。形は Worker で常に作ってあるため、切り替えてもデータの再読み込みは起きない。詳細は [8.7](#87-1-階の構成) を参照。`enabled` が真偽値でない場合、例外を送出する。
 
 #### `setRoof(options: RoofOptions): this`
 
@@ -640,7 +647,7 @@ type PaletteColor = RGB | { color: RGB; weight: number };  // RGB の重みは 1
 | `sill` | `number` | 0–1 | 窓の下端の高さ / 階高。`sill + windowHeight` は 1 以下。 |
 | `mullions` | `number` | 1–16 | 窓の縦方向の分割数。 |
 | `curtainWall` | `boolean` | — | `true` の場合、全面ガラスとして描く。 |
-| `groundFloor` | `GroundFloor` | `'same' \| 'storefront' \| 'lobby'` | 1 階の扱い。`'storefront'` と `'lobby'` は 1 階の階高を上げ、大判ガラスとして描く。 |
+| `groundFloor` | `GroundFloor` | `'same' \| 'storefront' \| 'lobby' \| 'apartment' \| 'house'` | 1 階の構成。[8.7](#87-1-階の構成) を参照。`'storefront'` と `'lobby'` は 1 階の階高を上げる。 |
 | `balcony` | `number` | 0–1 | 2 階以上のバルコニー手すりの強さ。`0` の場合、バルコニーを作らない。0 より大きい場合、立体のバルコニーを作る（[8.6](#86-バルコニー)）。 |
 | `balconyDepth` | `number` | 0.5–3、任意、既定 1.5 | バルコニーの奥行き（m）。外壁の面から内側へ引っ込める量。 |
 | `slabLine` | `number` | 0–1 | 床スラブの横帯の強さ。 |
@@ -725,8 +732,8 @@ const PRESET_STYLES: Record<string, FacadeStyle>;
 | `plain` | 3.2 | 0 | `same` | `office` | 0.25 | 2 | 0.1 | — |
 | `curtainWall` | 1.8 | 0.96 | `lobby` | `office` | 0.8 | 6 | 0.5 | `{ metal: 0.6 }` |
 | `office` | 3.2 | 0.66 | `lobby` | `office` | 0.45 | 4 | 0.35 | `{ tile: 0.35, concrete: 0.05, stone: 0.2, metal: 0.15 }` |
-| `apartment` | 3.6 | 0.52 | `same` | `residential` | 0.12 | 1 | 0 | `{ tile: 0.6, concrete: 0.05 }` |
-| `house` | 3 | 0.38 | `same` | `residential` | 0.08 | 1 | 0 | — |
+| `apartment` | 3.6 | 0.52 | `apartment` | `residential` | 0.12 | 1 | 0 | `{ tile: 0.6, concrete: 0.05 }` |
+| `house` | 3 | 0.38 | `house` | `residential` | 0.08 | 1 | 0 | — |
 | `mixed` | 3.2 | 0.46 | `storefront` | `residential` | 0.25 | 1 | 0 | `{ tile: 0.5 }` |
 | `commercial` | 4.5 | 0.8 | `storefront` | `shop` | 0.5 | 6 | 0.7 | `{ tile: 0.2, stone: 0.1, metal: 0.3 }` |
 | `hotel` | 2.6 | 0.46 | `lobby` | `residential` | 0.25 | 1 | 0 | `{ tile: 0.4, stone: 0.2 }` |
@@ -1001,6 +1008,48 @@ const layer = new BuildingFacadeLayer({
 layer.setBalconies(false); // 外壁の面に手すりを描くだけにする
 ```
 
+### 8.7 1 階の構成
+
+スタイルの `groundFloor` に応じて、正面（開けた面）の 1 階を描き分ける。側壁・界壁の 1 階は上の階と同じ規則で描く。
+
+| `groundFloor` | プリセット | 1 階の描き方 |
+|---|---|---|
+| `'same'` | `industrial` `generic` `plain` | 上の階と同じ窓。 |
+| `'storefront'` | `mixed` `commercial` | 窓 1〜3 列分ずつのテナントに分ける。境目に柱、ガラスの上に看板帯を描く。テナントごとに、店の種類・看板の色・入口のドア・テント・シャッターを決める。 |
+| `'lobby'` | `curtainWall` `office` `hotel` `institutional` | 柱の間の大きなガラス。1 階の外壁は石張りの基壇（色は建物ごと）。入口のある面は、中央に入口のドアと庇を描く。ロビーは夜も 85% の建物で点灯する。 |
+| `'apartment'` | `apartment` | 入口のある面に、エントランス（明るいロビーとガラスの扉、庇）を描く。4 列以上の面では 40% の確率で、エントランスから遠い端の 1〜2 列を駐車場・駐輪場の開口にする。ほかの 1 階住戸は、日当たり面では掃き出し窓と専用庭の塀（生け垣かアルミの格子）、それ以外では面格子を付ける。 |
+| `'house'` | `house` | 入口のある面に、玄関ドア（色は建物ごと）と小さな庇を描く。間口 5.5 m 以上・2 列以上の面では 35% の確率でガレージのシャッターを付ける。ほかの窓は、日当たり面では掃き出し窓、それ以外では 40% の確率で面格子を付ける。 |
+
+**店の種類**（`'storefront'`）: 内装・照明・営業時間が変わる。
+
+| 種類 | 割合 | 内装と照明 | 営業 |
+|---|---|---|---|
+| 物販 | 38% | 棚の並ぶ明るい店内 | 時刻の店舗の点灯率に従う |
+| 飲食 | 24% | 暖色の照明、テーブルと椅子。55% にテント | 夜遅くまで（点灯率 + 夜の 35%） |
+| コンビニ | 10% | 白く明るい照明 | 24 時間 |
+| 事務所・医院 | 14% | オフィスの内装。ガラスの中ほどに目隠しのフィルム | 時刻の店舗の点灯率に従う |
+| 空き店舗 | 14% | 照明なし。看板なし | 閉店 |
+
+- 物販の 30% にテントを付ける。
+- 閉店中の店は、55%（空き店舗は 80%）でシャッターを下ろす。シャッターのある店でテントのない店には、ガラスの上にシャッターボックスを描く。
+- 看板帯は地の色 8 色から選び、文字らしい模様を描く。夜は開店中の店の看板が光る。
+
+**入口のある面**: 建物ごとに 1 つ選ぶ。正面のうち、前面のあき（道路側ほど広い）と長さで最も表らしい面とする。`'lobby'`・`'apartment'`・`'house'` の入口はこの面に置く。
+
+**庇・テント・突き出し看板**: `solidFixtures` が `false`（既定）の場合、庇とテントは外壁の面に描く。`true` の場合は、Worker で作った形を描き、外壁の面には描かない。
+
+| 部材 | 形 |
+|---|---|
+| テント | ガラスの上から 1.0 m 張り出す斜めの面と、前の垂れ。縞模様のものもある |
+| 庇 | ロビーは出 1.8 m（ホテルは 3.0 m）、エントランスは 1.5 m、戸建ての玄関は 0.7 m |
+| 突き出し看板 | 店の 35% に、テナントの端から 0.6 m 張り出す縦長の看板。夜は開店中なら光る。外壁の面に描く場合は描かない |
+
+**判定のしかた**: テナントの区切り・店の種類・入口の位置などは、建物と連続面ごとの 24 ビットのキーから 32 ビット整数のハッシュで決める。シェーダと Worker で同じ結果になるので、外壁の面に描いた看板やドアと、立体の庇・テントの位置がそろう。
+
+```ts
+layer.setSolidFixtures(true); // 庇・テント・突き出し看板を立体で描く
+```
+
 ---
 
 ## 9. 時刻と照明
@@ -1231,6 +1280,7 @@ function getWorkerUrl(): string | URL | undefined
 | 投影 | 動作の確認はメルカトル投影だけで行われている。globe 投影は未確認である。 |
 | 影 | 建物は影を落とさない。バルコニーの中の影だけは、手すりと天井から求めて付ける。 |
 | バルコニー | 外形の内側に引っ込めて作り、外へは張り出さない。階ごと・住戸ごとの違い（バルコニーのない階、形の違い）はない。 |
+| 1 階の構成 | 店の種類・入口の位置などは推定で、実際の建物とは一致しない。看板の文字は模様で、読める文字ではない。 |
 | スタイルの数 | 1 レイヤーあたり最大 16 個。 |
 | 3D Tiles | `EXT_structural_metadata` の外部スキーマ（`schemaUri`）は読めない。暗黙的タイリングの S2 範囲は読めない。 |
 | GeoJSON | データ全体を 1 回で取得し、1 つのメッシュにする。 |
