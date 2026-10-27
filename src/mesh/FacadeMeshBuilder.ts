@@ -6,7 +6,7 @@ import { buildRingBalconies, firstBalconyFloor, floorLayout, type BalconyEmitter
 import { buildRingFrontage, keyOf, type FixtureEmitter, type FrontageLayout } from './Frontage';
 import { buildPitchedRoof, planPitchedRoof, ridgeSplits, roofSurfaceHeight, type PitchedRoofLayout } from './PitchedRoof';
 import { BALCONY_STRIDE, FIXTURE_STRIDE, GROUND_STRIDE, PITCHED_ROOF_STRIDE, ROOF_STRIDE, WALL_STRIDE, type FacadeLengths, type FacadeMesh, type MeshReference } from './layout';
-import { EQUIPMENT_TYPES, generateRooftop } from './RooftopGenerator';
+import { EQUIPMENT_TYPES, generateRooftop, type RooftopResult } from './RooftopGenerator';
 
 // フットプリントから壁（窓はシェーダで描くので 1 セグメント = 1 四角形）と屋根のメッシュを作る。
 // 座標は基準点からの局所座標（m, x=東, y=北, z=上）。float32 の精度不足を避けるため（RTC）。
@@ -186,7 +186,7 @@ export class FacadeMeshBuilder {
       }
 
       // ---- 屋上設備と航空障害灯
-      const rooftop = roofPlan ? { equipment: [], lights: [], axisAngle: 0, roofArea: 0 } : generateRooftop({
+      const rooftop: RooftopResult = roofPlan ? { equipment: [], lights: [], axisAngle: 0, roofArea: 0 } : generateRooftop({
         polygons,
         height,
         storeys: record.storeys ?? Math.max(1, Math.round(height / fh)),
@@ -284,6 +284,7 @@ export class FacadeMeshBuilder {
 
         // ---- 屋根（勾配屋根の建物は上で作った）
         if (roofPlan) return;
+        const solarArea = rooftop.solarArea ?? [0, 0, 0, 0];
         const flat: number[] = [];
         const holes: number[] = [];
         rings.forEach((ring, i) => {
@@ -293,7 +294,7 @@ export class FacadeMeshBuilder {
         const tris = earcut(flat, holes, 2);
         const base = roofs.length / ROOF_STRIDE;
         for (let i = 0; i < flat.length; i += 2) {
-          roofs.push(flat[i], flat[i + 1], top, styleIndex, seed, cat, rooftop.axisAngle, rooftop.roofArea, height, ground);
+          roofs.push(flat[i], flat[i + 1], top, styleIndex, seed, cat, rooftop.axisAngle, rooftop.roofArea, height, ...solarArea, ground);
         }
         for (const t of tris) roofIdx.push(base + t);
       });

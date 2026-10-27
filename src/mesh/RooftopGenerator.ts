@@ -40,6 +40,8 @@ export interface RooftopResult {
   equipment: EquipmentItem[];
   /** 航空障害灯の位置（屋上の角） */
   lights: Point[];
+  /** 太陽光パネルを並べる範囲（主軸座標系の u0, v0, u1, v1）。並べられる場所がなければ undefined */
+  solarArea?: [number, number, number, number];
 }
 
 /** 航空障害灯を生成する最低の高さ (m)。表示するかどうかは minHeight でシェーダが決める */
@@ -47,6 +49,12 @@ export const AVIATION_LIGHT_MIN_GENERATED_HEIGHT = 10;
 /** パラペットや縁から設備を離す距離 (m) */
 const EDGE_CLEARANCE = 0.8;
 const ITEM_GAP = 0.5;
+/** 太陽光パネルを縁から離す距離 (m)。パラペットと点検の通路の分 */
+const SOLAR_EDGE_CLEARANCE = 1.0;
+/** 太陽光パネルを屋上設備から離す距離 (m) */
+const SOLAR_EQUIPMENT_GAP = 0.6;
+/** 太陽光パネルの範囲として使う最小の面積 (m²) */
+const MIN_SOLAR_AREA = 6;
 
 const LARGE_ROOF_CATEGORIES = new Set<BuildingCategory>(['office', 'commercial', 'mixed_commercial', 'hotel', 'public', 'education_welfare']);
 
@@ -137,13 +145,15 @@ export function generateRooftop(input: RooftopInput): RooftopResult {
 
   // ---- 屋上設備
   const equipment: EquipmentItem[] = [];
-  if (input.openSided || input.height < 4 || roofArea < 12) return { axisAngle, roofArea, equipment, lights };
+  if (input.openSided || roofArea < 12) return { axisAngle, roofArea, equipment, lights };
 
   // 配置済みの矩形（主軸座標系）
   const placed: { u0: number; v0: number; u1: number; v1: number }[] = [];
   const allPts = polygons.flatMap((rings) => rings[0]).map(toAxis);
   const umin = Math.min(...allPts.map((p) => p[0])), umax = Math.max(...allPts.map((p) => p[0]));
   const vmin = Math.min(...allPts.map((p) => p[1])), vmax = Math.max(...allPts.map((p) => p[1]));
+  const solar = () => largestFreeRect(polygons, fromAxis, placed, [umin, vmin, umax, vmax]);
+  if (input.height < 4) return { axisAngle, roofArea, equipment, lights, solarArea: solar() };
 
   const tryPlace = (type: EquipmentType, w: number, d: number, h: number, rank: number, tries = 25): boolean => {
     for (let t = 0; t < tries; t++) {
@@ -192,5 +202,48 @@ export function generateRooftop(input: RooftopInput): RooftopResult {
     tryPlace('acUnits', units * 0.95, 0.45, 0.85, rng(), 12);
   }
 
-  return { axisAngle, roofArea, equipment, lights };
+  return { axisAngle, roofArea, equipment, lights, solarArea: solar() };
+}
+
+/**
+ * 太陽光パネルを並べる範囲: 縁から SOLAR_EDGE_CLEARANCE 離れ、屋上設備（表示しないものも含む）を避けた中で、
+ * 主軸に沿った最も広い長方形。屋上を格子に分けて、置ける格子の中の最大の長方形を求める（ヒストグラムとスタック）
+ */
+function largestFreeRect(
+  polygons: Point[][][],
+  fromAxis: (p: Point) => Point,
+  placed: { u0: number; v0: number; u1: number; v1: number }[],
+  [umin, vmin, umax, vmax]: [number, number, number, number],
+): [number, number, number, number] | undefined {
+  const cell = Math.max(0.5, Math.max(umax - umin, vmax - vmin) / 80);
+  const nx = Math.ceil((umax - umin) / cell), ny = Math.ceil((vmax - vmin) / cell);
+  if (nx < 1 || ny < 1) return undefined;
+  const g = SOLAR_EQUIPMENT_GAP;
+  const heights = new Int32Array(nx);
+  let best = { area: 0, i0: 0, i1: 0, j0: 0, j1: 0 };
+  const stack: number[] = [];
+  for (let j = 0; j < ny; j++) {
+    const v = vmin + (j + 0.5) * cell;
+    for (let i = 0; i < nx; i++) {
+      const u = umin + (i + 0.5) * cell;
+      const free =
+        !placed.some((b) => u > b.u0 - g && u < b.u1 + g && v > b.v0 - g && v < b.v1 + g) &&
+        polygons.some((rings) => insideWithClearance(fromAxis([u, v]), rings, SOLAR_EDGE_CLEARANCE));
+      heights[i] = free ? heights[i] + 1 : 0;
+    }
+    // この行を底辺とする最大の長方形
+    stack.length = 0;
+    for (let i = 0; i <= nx; i++) {
+      const h = i < nx ? heights[i] : 0;
+      while (stack.length && heights[stack[stack.length - 1]] >= h) {
+        const top = stack.pop()!;
+        const left = stack.length ? stack[stack.length - 1] + 1 : 0;
+        const area = heights[top] * (i - left);
+        if (area > best.area) best = { area, i0: left, i1: i - 1, j0: j - heights[top] + 1, j1: j };
+      }
+      stack.push(i);
+    }
+  }
+  if (best.area * cell * cell < MIN_SOLAR_AREA) return undefined;
+  return [umin + best.i0 * cell, vmin + best.j0 * cell, umin + (best.i1 + 1) * cell, vmin + (best.j1 + 1) * cell];
 }

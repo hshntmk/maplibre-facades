@@ -1181,10 +1181,12 @@ layout(location = 0) in vec3 a_pos;
 layout(location = 1) in vec3 a_attr;   // style, bSeed, category
 layout(location = 2) in vec3 a_info;   // axisAngle, roofArea, height
 layout(location = 3) in float a_ground;
+layout(location = 4) in vec4 a_solar;  // 太陽光パネルを並べる長方形（主軸座標系の u0, v0, u1, v1）
 ${GROUND_VS}
 out vec3 v_world;
 flat out vec3 v_attr;
 flat out vec3 v_info;
+flat out vec4 v_solar;
 void main() {
   int sid = int(a_attr.x + 0.5);
   vec3 p = a_pos;
@@ -1192,6 +1194,7 @@ void main() {
   v_world = p;
   v_attr = a_attr;
   v_info = a_info;
+  v_solar = a_solar;
   gl_Position = u_matrix * vec4(p, 1.0);
   v_fogDepth = fogDepth(gl_Position);
 }
@@ -1203,6 +1206,7 @@ uniform float u_roofFinish;      // 1 = 用途別の仕上げを描く
 in vec3 v_world;
 flat in vec3 v_attr;
 flat in vec3 v_info;
+flat in vec4 v_solar;
 out vec4 fragColor;
 
 void main() {
@@ -1253,7 +1257,7 @@ void main() {
     }
 
     bool green = v_info.y >= 300.0 && hash12(vec2(bSeed * 71.0, 3.1)) < t9.y;
-    bool solar = !green && hash12(vec2(bSeed * 73.0, 5.7)) < t9.z;
+    bool solar = !green && hash12(vec2(bSeed * 73.0, 5.7)) < t9.z && v_solar.x < v_solar.z;
     if (green) {
       // 屋上緑化: ノイズで島状に植栽し、細かい濃淡を付ける
       float m = vnoise(p * 0.07 + seedOffset) * 0.7 + vnoise(p * 0.25 + seedOffset) * 0.3;
@@ -1262,12 +1266,19 @@ void main() {
       plant *= mix(0.75, 1.0, vnoise(p * 4.0) * fine + (1.0 - fine) * 0.5);
       albedo = mix(albedo, plant, grass);
     } else if (solar) {
-      // 太陽光パネル: 1.7m 間隔の列、1m ごとのモジュール
-      float region = smoothstep(0.36, 0.4, vnoise(p * 0.05 + seedOffset));
-      float row = step(fract(p.y / 1.7), 0.62);
-      float frame = mix(1.0, 0.7, (1.0 - smoothstep(0.02, 0.04, abs(fract(p.x + 0.5) - 0.5))) * fine);
-      vec3 panel = mix(vec3(0.05, 0.08, 0.17), vec3(0.12, 0.17, 0.3), fract(p.y / 1.7) / 0.62) * frame;
-      albedo = mix(albedo, panel, region * row);
+      // 太陽光パネル: Worker が求めた長方形（縁から離し、設備を避けた範囲）に、1.7m 間隔の列と 1m ごとのモジュールを並べる。
+      // 列とモジュールは長方形に収まる数だけにして、中央に寄せる
+      vec2 size = v_solar.zw - v_solar.xy;
+      vec2 count = floor(vec2(size.x, (size.y + 0.65) / 1.7));
+      vec2 origin = v_solar.xy + (size - vec2(count.x, count.y * 1.7 - 0.65)) * 0.5;
+      vec2 q = p - origin;
+      if (q.x > 0.0 && q.x < count.x && q.y > 0.0 && q.y < count.y * 1.7) {
+        float ry = fract(q.y / 1.7);
+        float row = step(ry, 0.62);
+        float frame = mix(1.0, 0.7, (1.0 - smoothstep(0.02, 0.04, abs(fract(q.x + 0.5) - 0.5))) * fine);
+        vec3 panel = mix(vec3(0.05, 0.08, 0.17), vec3(0.12, 0.17, 0.3), ry / 0.62) * frame;
+        albedo = mix(albedo, panel, row);
+      }
     }
   }
 
@@ -1517,11 +1528,33 @@ void main() {
     shade = mix(shade, 1.0, cap);
     float gutter = 1.0 - smoothstep(0.07, 0.1, v);
     base = mix(base, vec3(0.3, 0.3, 0.3), gutter);
-    // 太陽光パネル: 南向きの面の中央に、軒・棟・端から 0.5m 離して並べる
+    // 太陽光パネル: 南向きの面に、面の中に収まる長方形で並べる（軒から 0.6m、棟と端から 0.5〜0.6m 離す）。
+    // モジュール（1m × 1.65m）は縦置きと横置きを試し、段数ごとに上端の幅に収まる列数を求めて、枚数が最も多い並べ方を選ぶ。
+    // 寄棟の面は棟に近いほど狭いので軒側に寄せ、縦 1 列の並べ方は使わない。切妻・片流れの面は上下にも中央に寄せる
     if (v_info.w > 0.5 && u_roofFinish > 0.5) {
-      float halfAtV = v_face.x - v * v_normal.z;
-      if (v > 0.6 && v < v_face.y - 0.5 && abs(u) < min(halfAtV - 0.6, 4.5)) {
-        vec2 cell = vec2(u / 1.0, v / 1.65);
+      bool hip = v_face.x < 1000.0;
+      float vBottom = 0.6, vTop = v_face.y - 0.5;
+      vec2 module = vec2(1.0, 1.65);
+      vec2 count = vec2(0.0);
+      for (int o = 0; o < 2; o++) {
+        vec2 m = o == 0 ? vec2(1.0, 1.65) : vec2(1.65, 1.0);
+        for (int r = 1; r <= 12; r++) {
+          float top = vBottom + float(r) * m.y;
+          if (top > vTop) break;
+          float halfU = min(v_face.x - (hip ? top : vTop) * v_normal.z - 0.6, 4.5);
+          float cols = floor(2.0 * halfU / m.x);
+          if (hip && cols < 2.0) continue;
+          if (cols >= 1.0 && cols * float(r) * m.x * m.y > count.x * count.y * module.x * module.y + 0.01) {
+            count = vec2(cols, float(r));
+            module = m;
+          }
+        }
+      }
+      float spare = hip ? 0.0 : (vTop - vBottom - count.y * module.y) * 0.5;
+      vec2 lo = vec2(-count.x * module.x * 0.5, vBottom + spare);
+      vec2 hi = lo + count * module;
+      if (count.x >= 1.0 && u > lo.x && u < hi.x && v > lo.y && v < hi.y) {
+        vec2 cell = (vec2(u, v) - lo) / module;
         vec2 f = fract(cell);
         float edge = max(1.0 - smoothstep(0.0, 0.03, min(f.x, 1.0 - f.x)), 1.0 - smoothstep(0.0, 0.02, min(f.y, 1.0 - f.y)));
         base = mix(vec3(0.06, 0.08, 0.15), vec3(0.6, 0.62, 0.64), edge * detail);

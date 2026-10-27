@@ -64,14 +64,16 @@ export const PITCHED_ROOF_ATTRIBUTES = [
 ];
 
 /** 屋根の頂点（floats） */
-export const ROOF_STRIDE = 10;
+export const ROOF_STRIDE = 14;
 // 0-2 pos（z は建物の上端。パラペットの分はシェーダで下げる） | 3 style | 4 bSeed | 5 category
-// 6 axisAngle（建物の主軸の向き） | 7 roofArea (m²) | 8 height（建物の高さ） | 9 ground
+// 6 axisAngle（建物の主軸の向き） | 7 roofArea (m²) | 8 height（建物の高さ）
+// 9-12 solarArea（太陽光パネルを並べる長方形。主軸座標系の u0, v0, u1, v1。u0 >= u1 ならなし） | 13 ground
 export const ROOF_ATTRIBUTES = [
   { location: 0, size: 3, offset: 0 },
   { location: 1, size: 3, offset: 3 },
   { location: 2, size: 3, offset: 6 },
-  { location: 3, size: 1, offset: 9 },
+  { location: 3, size: 1, offset: 13 },
+  { location: 4, size: 4, offset: 9 },
 ];
 
 /** 屋上設備のインスタンス（floats）。単位立方体をインスタンス描画する */

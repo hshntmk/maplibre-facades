@@ -136,6 +136,27 @@ describe('generateRooftop', () => {
     for (const e of equipment) expect(e.x > 10 && e.x < 30 && e.y > 10 && e.y < 30).toBe(false);
   });
 
+  it('finds a rectangular solar area away from the edges and the equipment', () => {
+    const ring = rect(0, 0, 40, 25);
+    const { equipment, solarArea } = generateRooftop(office([[ring]]));
+    expect(solarArea).toBeDefined();
+    const [u0, v0, u1, v1] = solarArea!;
+    // 主軸は x 方向（最も長い辺）なので、主軸座標系 = 局所座標
+    expect(Math.min(u0, v0, 40 - u1, 25 - v1)).toBeGreaterThanOrEqual(1 - 0.5);
+    expect((u1 - u0) * (v1 - v0)).toBeGreaterThan(100);
+    for (const e of equipment) {
+      const overlap = e.x + e.w / 2 > u0 && e.x - e.w / 2 < u1 && e.y + e.d / 2 > v0 && e.y - e.d / 2 < v1;
+      expect(overlap).toBe(false);
+    }
+  });
+
+  it('keeps the solar area inside an L-shaped roof', () => {
+    const l: Point[] = [[0, 0], [30, 0], [30, 10], [10, 10], [10, 30], [0, 30]];
+    const { solarArea } = generateRooftop(office([[l]], { storeys: 1, height: 5, category: 'house' }));
+    const [u0, v0, u1, v1] = solarArea!;
+    for (const c of [[u0, v0], [u1, v0], [u1, v1], [u0, v1]] as Point[]) expect(insidePolygon(c, l)).toBe(true);
+  });
+
   it('skips open-sided structures and tiny roofs', () => {
     expect(generateRooftop(office([[rect(0, 0, 20, 20)]], { openSided: true })).equipment).toHaveLength(0);
     expect(generateRooftop(office([[rect(0, 0, 3, 3)]])).equipment).toHaveLength(0);
