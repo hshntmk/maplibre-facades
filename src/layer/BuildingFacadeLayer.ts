@@ -172,6 +172,13 @@ const STYLE_DEBUG_COLORS: RGB[] = [
 
 const DEBUG_INDEX: Record<DebugMode, number> = { none: 0, category: 1, style: 2, facade: 3 };
 
+/**
+ * 細部の部材を描くタイルの条件: タイルのいちばん近い所で 1m が画面上でこのピクセル数以上に見えること。
+ * バルコニーは外壁が窓 1 枚分（約 3m）を 10 ピクセル以上で描く所でしか見えない（それより遠くは外壁に手すりを描く）。
+ * パラペットの内側（高さ 0.9m 前後）・1 階の部材は 1 ピクセル前後、屋上設備は 2.5m の受水槽が 2 ピクセル前後より小さくなる距離から省く
+ */
+const DETAIL_MIN_PX_PER_METER = { balconies: 3, fixtures: 1.5, parapet: 1, equipment: 0.8 } as const;
+
 /** facade 表示の色（シェーダ側の並び: party, side, front, sunSide） */
 export const FACADE_COLORS: Readonly<Record<'party' | 'side' | 'front' | 'sunSide', RGB>> = {
   party: [0.86, 0.3, 0.3],
@@ -219,6 +226,10 @@ interface TileGpu {
   /** 描画のたびに計算する、局所座標 → クリップの行列とカメラ位置 */
   matrix32: Float32Array;
   eye: [number, number, number];
+  /** タイルの建物の範囲の半径 (m) */
+  radius: number;
+  /** 描画のたびに計算する、タイルのいちばん近い所で 1m が画面上で何ピクセルか（遠いタイルの細部を省くのに使う） */
+  pxPerMeter: number;
 }
 
 interface TileEntry {
@@ -637,6 +648,8 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
     const fog = this._fog && this.map ? computeFog(this.map, options, this.fogScratch) : NO_FOG;
 
     // タイルごとに: 局所座標 (m) → メルカトル → クリップ。倍精度で合成してから float32 に落とす（RTC）
+    // あわせて、タイルのいちばん近い所での 1m の画面上の大きさ（ピクセル）を求める
+    const pxScale = gl.drawingBufferHeight / 2 / Math.tan(options.fov / 2);
     for (const t of tiles) {
       const ref = t.reference;
       const s = ref.meterInMercator;
@@ -648,6 +661,8 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
         const m = this.inverse;
         t.eye = [m[8] / m[11], m[9] / m[11], m[10] / m[11]];
       }
+      const nearest = Math.hypot(t.eye[0], t.eye[1], t.eye[2]) - t.radius;
+      t.pxPerMeter = nearest > 1 ? pxScale / nearest : Infinity;
     }
 
     const L = this.lighting;
@@ -684,8 +699,10 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
       gl.uniform1f(u.u_fogOpacity, fog.opacity);
     };
     const effects = this._effects;
-    const forEachTile = (p: Program, draw: (t: TileGpu) => void) => {
+    /** minPxPerMeter: タイルのいちばん近い所で 1m がこれより小さく見えるタイルは描かない（細部の部材） */
+    const forEachTile = (p: Program, draw: (t: TileGpu) => void, minPxPerMeter = 0) => {
       for (const t of tiles) {
+        if (t.pxPerMeter < minPxPerMeter) continue;
         gl.uniformMatrix4fv(p.uniforms.u_matrix, false, t.matrix32);
         gl.uniform3fv(p.uniforms.u_eye, t.eye);
         gl.activeTexture(gl.TEXTURE2);
@@ -703,7 +720,7 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
         if (t.balconies.count === 0) return;
         gl.bindVertexArray(t.balconies.vao);
         gl.drawElements(gl.TRIANGLES, t.balconies.count, gl.UNSIGNED_INT, 0);
-      });
+      }, DETAIL_MIN_PX_PER_METER.balconies);
     }
 
     // 壁
@@ -741,7 +758,7 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
         if (t.fixtures.count === 0) return;
         gl.bindVertexArray(t.fixtures.vao);
         gl.drawElements(gl.TRIANGLES, t.fixtures.count, gl.UNSIGNED_INT, 0);
-      });
+      }, DETAIL_MIN_PX_PER_METER.fixtures);
     }
 
     // パラペットの内側（外壁と同じ頂点を使う）
@@ -750,7 +767,7 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
       forEachTile(programs.parapet, (t) => {
         gl.bindVertexArray(t.walls.vao);
         gl.drawElements(gl.TRIANGLES, t.walls.count, gl.UNSIGNED_INT, 0);
-      });
+      }, DETAIL_MIN_PX_PER_METER.parapet);
     }
 
     // 屋根
@@ -780,7 +797,7 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
         if (t.equipment.instanceCount === 0) return;
         gl.bindVertexArray(t.equipment.vao);
         gl.drawElementsInstanced(gl.TRIANGLES, t.equipment.count, gl.UNSIGNED_SHORT, 0, t.equipment.instanceCount);
-      });
+      }, DETAIL_MIN_PX_PER_METER.equipment);
     }
 
     // 航空障害灯（加算合成、深度は書かない）
@@ -1094,6 +1111,8 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
       pitchedRoofs: createMesh(gl, mesh.pitchedRoofs, mesh.pitchedRoofIndices, PITCHED_ROOF_STRIDE, PITCHED_ROOF_ATTRIBUTES),
       ground: createTileGround(gl, mesh.grounds, mesh.reference),
       matrix32: new Float32Array(16),
+      radius: mesh.radius,
+      pxPerMeter: Infinity,
       eye: [0, 0, 0],
     };
     entry.stats = stats;

@@ -119,6 +119,7 @@ export class FacadeMeshBuilder {
     const balconyIdx = new GrowableU32();
     const fixtures = new GrowableF32();
     const fixtureIdx = new GrowableU32();
+    let radius = 0;
     const pitched = new GrowableF32();
     const pitchedIdx = new GrowableU32();
     const lengths: FacadeLengths = { front: 0, side: 0, party: 0, sunSide: 0 };
@@ -143,6 +144,7 @@ export class FacadeMeshBuilder {
         }
       }
       grounds.push(minX, minY, maxX, maxY);
+      radius = Math.max(radius, Math.hypot(Math.max(-minX, maxX), Math.max(-minY, maxY)));
       const seed = hashId(record.id);
       const cat = categoryIndex(record.category);
       const top = record.height;
@@ -315,6 +317,7 @@ export class FacadeMeshBuilder {
       pitchedRoofs: pitched.result(),
       pitchedRoofIndices: pitchedIdx.result(),
       grounds: grounds.result(),
+      radius,
       facadeLengths: lengths,
     };
   }

@@ -139,4 +139,6 @@ export interface FacadeMesh {
   pitchedRoofIndices: Uint32Array;
   /** 建物ごとの地形の標高を引く位置（GROUND_STRIDE ごと） */
   grounds: Float32Array;
+  /** 基準点からいちばん遠い建物の外接矩形の角までの水平距離 (m)。描画時に、遠いタイルの細部を省くのに使う */
+  radius: number;
 }

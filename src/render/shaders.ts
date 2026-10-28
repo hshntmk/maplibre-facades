@@ -840,31 +840,35 @@ void main() {
   float grime = 0.0;  // 汚れの量（素材のつやを落とす）
   if (dirt > 0.0) {
     vec2 wseed = vec2(bSeed * 211.0, runSeed * 97.0);
+    // 細かい模様（窓台の雨だれ、縦筋のむら、しみの縁と濃さのむら）は、窓 1 枚分が数ピクセルより小さい遠景では
+    // 1 ピクセルより細かいので、平均の値に置き換えてノイズを計算しない（detail で近景の模様へなめらかにつなぐ）
     // 雨だれ: 窓台の両端と窓台から下へ。細かい筋は遠景で消す
     float streak = 0.0;
-    if (hasWindow && cy < y0) {
+    if (hasWindow && cy < y0 && detail > 0.0) {
       float below = y0 - cy;
       float len = mix(0.5, 2.0, hash12(vec2(winSeed, 41.0)));
       float fade = 1.0 - smoothstep(0.0, len, below);
       float edge = min(abs(cx - (winC - halfW)), abs(cx - (winC + halfW)));
       float corner = exp(-edge * edge * 30.0);
       float sill = step(abs(cx - winC), halfW) * 0.35;
-      streak = max(corner, sill) * fade * (0.55 + 0.45 * vnoise(vec2(cx * 9.0, cy * 1.2) + wseed));
+      streak = max(corner, sill) * fade * (0.55 + 0.45 * vnoise(vec2(cx * 9.0, cy * 1.2) + wseed)) * detail;
     }
     // 屋上の縁から外壁を伝う縦筋（壁に沿った位置ごとに長さが違う）
     float column = vnoise(vec2(v_uv.x * 1.3, 0.5) + wseed);
     float fromTop = v_height - v_uv.y;
     if (fromTop < 0.0) fromTop = 99.0;  // 切妻の妻側の三角（軒より上）には縁からの筋を付けない
     float topStreak = smoothstep(0.45, 0.85, column) * (1.0 - smoothstep(0.0, mix(1.5, 9.0, column), fromTop));
-    topStreak *= 0.6 + 0.4 * vnoise(vec2(v_uv.x * 7.0, v_uv.y * 0.6) + wseed);
+    topStreak *= 0.6 + 0.4 * (detail > 0.0 ? mix(0.5, vnoise(vec2(v_uv.x * 7.0, v_uv.y * 0.6) + wseed), detail) : 0.5);
     streak = max(streak, topStreak) * mix(0.4, 1.0, detail);
 
     // くすみ: 地面近くの泥はねと、壁全体のゆるやかな濃淡
     float ground = 1.0 - smoothstep(0.0, mix(0.8, 2.0, hash12(wseed)), v_uv.y);
     float blotch = smoothstep(0.3, 0.85, vnoise(v_uv * vec2(0.07, 0.11) + wseed));
     // しみ: 水が回った跡。縁はぼかし、縦に伸ばし、濃さにもむらを付ける
-    float stainShape = vnoise(v_uv * vec2(0.35, 0.12) + wseed.yx) * 0.75 + vnoise(v_uv * vec2(1.4, 0.5) + wseed) * 0.25;
-    float stain = smoothstep(0.55, 0.8, stainShape) * (0.5 + 0.5 * vnoise(v_uv * 2.0 + wseed.yx)) * mix(0.5, 1.0, detail);
+    float stainFine = detail > 0.0 ? mix(0.5, vnoise(v_uv * vec2(1.4, 0.5) + wseed), detail) : 0.5;
+    float stainShade = detail > 0.0 ? mix(0.5, vnoise(v_uv * 2.0 + wseed.yx), detail) : 0.5;
+    float stainShape = vnoise(v_uv * vec2(0.35, 0.12) + wseed.yx) * 0.75 + stainFine * 0.25;
+    float stain = smoothstep(0.55, 0.8, stainShape) * (0.5 + 0.5 * stainShade) * mix(0.5, 1.0, detail);
 
     float d = dirt * (u_weathering.y * streak * 0.4 + u_weathering.z * (ground * 0.3 + blotch * 0.14) + u_weathering.w * stain * 0.12);
     d = clamp(d, 0.0, 0.65);
@@ -948,7 +952,10 @@ void main() {
   float aa = fw * 0.75;
   float windowMask = hasWindow ? 1.0 - smoothstep(-aa, aa, dist) : 0.0;
 
-  if (windowMask > 0.0) {
+  // 遠景（detail = 0）では、ここから下で color に描くもの（窓の中身・1 階の重ね描き・手すり・にじみ）は
+  // 最後に平均色で置き換わるので計算しない。窓 1 枚分が数ピクセルより小さい所のほとんどがこれに当たり、外壁の負荷の大半を占める
+  bool nearDetail = detail > 0.0;
+  if (windowMask > 0.0 && nearDetail) {
     // 窓内の正規化座標
     float wx = (cx - (winC - halfW)) / (2.0 * halfW);
     float wy = (cy - y0) / (y1 - y0);
@@ -1042,7 +1049,7 @@ void main() {
   }
 
   // ---------------------------------------------------------------- 1 階の重ね描き（玄関ドア・ガレージ・面格子・塀・シャッターボックス）
-  if (fk != FRONT_NONE) {
+  if (fk != FRONT_NONE && nearDetail) {
     float inPanel = 1.0 - smoothstep(-aa, aa, dist);
     uint bk = uint(v_keys.y);
     if (fk == FRONT_DOOR && inPanel > 0.0) {
@@ -1088,7 +1095,7 @@ void main() {
 
   // バルコニーの手すり（住宅、2 階以上）。立体で描くときは、外壁の面が手すりそのもの
   float railK = openBalcony ? 1.0 : (balcony > 0.0 && !isGround && hasWindow ? 0.8 * balcony : 0.0);
-  if (railK > 0.0 && cy < BALCONY_RAIL) {
+  if (railK > 0.0 && cy < BALCONY_RAIL && nearDetail) {
     vec3 rail;
     if (cy < BALCONY_FLOOR) rail = wallColor;                                        // 床スラブの小口
     else if (concreteRail(bSeed)) rail = wallColor * (cy > BALCONY_RAIL - 0.08 ? 1.08 : 0.96);  // 腰壁と笠木
@@ -1098,7 +1105,7 @@ void main() {
 
   // 窓まわりのにじみ（擬似ブルーム）。カメラのにじみに近づけるため、幅は画面上で 2〜3 ピクセル（実寸 5〜35cm）にし、
   // 窓の角は丸く広げる。セル（窓 1 枚分の区画）の端では 0 にして、隣のセルとの境目で光が途切れて見えないようにする
-  if (hasWindow && lit > 0.0 && dist > 0.0) {
+  if (hasWindow && lit > 0.0 && dist > 0.0 && nearDetail) {
     float d = length(max(vec2(dx, dy), 0.0));
     float radius = clamp(fw * 3.0, 0.06, 0.4);
     float edge = min(min(cx, colW - cx), min(cy, cellH - cy));

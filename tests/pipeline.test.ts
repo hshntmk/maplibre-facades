@@ -146,6 +146,9 @@ describe('FacadeMeshBuilder', () => {
     const wallSlots = new Set<number>();
     for (let i = 18; i < mesh.walls.length; i += WALL_STRIDE) wallSlots.add(mesh.walls[i]);
     expect([...wallSlots].sort()).toEqual([0, 1]);
+    // タイルの半径: 基準点（1 つ目の南西の角）から 2 つ目の建物の北東の角まで（約 100m 東、11m 北）
+    expect(mesh.radius).toBeGreaterThan(95);
+    expect(mesh.radius).toBeLessThan(105);
     expect(mesh.roofs[ROOF_STRIDE - 1]).toBe(0);
     expect(mesh.roofs[mesh.roofs.length - 1]).toBe(1);
   });
