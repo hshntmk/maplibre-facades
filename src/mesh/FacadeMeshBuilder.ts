@@ -5,7 +5,19 @@ import { DEFAULT_EXPOSURE_THRESHOLDS, analyzeFacades, exposureOf, type BuildingR
 import { buildRingBalconies, firstBalconyFloor, floorLayout, type BalconyEmitter, type BalconyLayout } from './Balconies';
 import { buildRingFrontage, keyOf, type FixtureEmitter, type FrontageLayout } from './Frontage';
 import { buildPitchedRoof, planPitchedRoof, ridgeSplits, roofSurfaceHeight, type PitchedRoofLayout } from './PitchedRoof';
-import { BALCONY_STRIDE, FIXTURE_STRIDE, GROUND_STRIDE, PITCHED_ROOF_STRIDE, ROOF_STRIDE, WALL_STRIDE, type FacadeLengths, type FacadeMesh, type MeshReference } from './layout';
+import {
+  BALCONY_STRIDE,
+  FIXTURE_STRIDE,
+  GROUND_STRIDE,
+  PITCHED_ROOF_STRIDE,
+  ROOF_STRIDE,
+  WALL_SEGMENT_FLOATS,
+  WALL_SEGMENT_TEXTURE_WIDTH,
+  WALL_STRIDE,
+  type FacadeLengths,
+  type FacadeMesh,
+  type MeshReference,
+} from './layout';
 import { EQUIPMENT_TYPES, generateRooftop, type RooftopResult } from './RooftopGenerator';
 
 // フットプリントから壁（窓はシェーダで描くので 1 セグメント = 1 四角形）と屋根のメッシュを作る。
@@ -110,6 +122,7 @@ export class FacadeMeshBuilder {
   build(): FacadeMesh & { facadeLengths: FacadeLengths } {
     const walls = new GrowableF32();
     const wallIdx = new GrowableU32();
+    const segments = new GrowableF32();
     const roofs = new GrowableF32();
     const roofIdx = new GrowableU32();
     const equipment = new GrowableF32();
@@ -225,8 +238,15 @@ export class FacadeMeshBuilder {
             const ty = (y1 - y0) / len;
             const runSeed = hashId(`${record.id}:run${f.runId}`);
             const base = walls.length / WALL_STRIDE;
-            const v = (x: number, y: number, z: number, u: number) =>
-              walls.push(x, y, z, u, z - bottom, tx, ty, f.runLength, runSeed, styleIndex, seed, fh, cat, wallHeight, f.clearance, f.sunSide ? 1 : 0, f.coverHeight - bottom, age, ground, balconyFrom, balconyDepth, runKey(f.runId), buildingKey, (f.runId === entranceRun ? 1 : 0) + wallFlags);
+            const segment = segments.length / WALL_SEGMENT_FLOATS;
+            segments.push(
+              tx, ty, f.runLength, runSeed,
+              styleIndex, seed, fh, cat,
+              wallHeight, f.clearance, f.sunSide ? 1 : 0, f.coverHeight - bottom,
+              age, ground, balconyFrom, balconyDepth,
+              runKey(f.runId), buildingKey, (f.runId === entranceRun ? 1 : 0) + wallFlags, bottom,
+            );
+            const v = (x: number, y: number, z: number, u: number) => walls.push(x, y, z, u, segment);
             v(a[0], a[1], zBottom, uA);
             v(b[0], b[1], zBottom, uB);
             v(b[0], b[1], zTopB, uB);
@@ -306,6 +326,7 @@ export class FacadeMeshBuilder {
       reference: this.reference,
       walls: walls.result(),
       wallIndices: wallIdx.result(),
+      wallSegments: padRows(segments, WALL_SEGMENT_TEXTURE_WIDTH * 4),
       roofs: roofs.result(),
       roofIndices: roofIdx.result(),
       equipment: equipment.result(),
@@ -321,6 +342,13 @@ export class FacadeMeshBuilder {
       facadeLengths: lengths,
     };
   }
+}
+
+/** テクスチャの行の単位（rowFloats）に末尾を 0 で埋めた配列（少なくとも 1 行） */
+function padRows(data: GrowableF32, rowFloats: number): Float32Array {
+  const out = new Float32Array(Math.max(1, Math.ceil(data.length / rowFloats)) * rowFloats);
+  out.set(data.data.subarray(0, data.length));
+  return out;
 }
 
 /**

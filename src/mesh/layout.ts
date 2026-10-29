@@ -1,24 +1,37 @@
 // メッシュの頂点レイアウトと基準点。メインスレッドと Worker の両方から参照する（依存なし）。
 
-/** 壁の頂点（floats）。シェーダの attribute と合わせること */
-export const WALL_STRIDE = 24;
-// 0-2 pos | 3-4 uv（u: 連続面に沿った距離 m, v: 高さ m） | 5-6 tangent | 7 runLength（負 = 角のない閉じた面）
-// 8 runSeed | 9 style | 10 bSeed | 11 floorHeight | 12 category | 13 height
-// 14 clearance（前面のあき m） | 15 sunSide | 16 coverHeight（前面をふさぐ建物の高さ m） | 17 age（築年数 0–1、不明は -1）
-// 18 ground（タイル内の建物の番号。地形の標高を引く。FacadeMesh.grounds を参照）
-// 19 balconyFrom（バルコニーを付ける最初の階。0 = なし） | 20 balconyDepth（奥行き m。正 = 外壁、負 = 引っ込んだ壁、0 = なし）
-// 21 runKey・22 buildingKey（1 階の構成を決める 24 ビットの整数。Frontage.ts） | 23 flags（1 = 入口のある連続面, 2 = 勾配屋根）
-// 勾配屋根の建物は 13 height が軒までの高さで、上端は屋根面に合わせる（切妻の妻側は三角）
+/**
+ * 壁の頂点（floats）。シェーダの attribute と合わせること。
+ * 壁 1 枚（四角形）の 4 頂点で同じ値は、頂点ではなく壁ごとのテクスチャ（FacadeMesh.wallSegments）に入れる。
+ * 頂点の読み込み量が 1/5 になる（以前は 24 floats = 96 バイト / 頂点）
+ */
+export const WALL_STRIDE = 5;
+// 0-2 pos | 3 u（連続面に沿った距離 m） | 4 segment（壁の番号。wallSegments を引く）
 export const WALL_ATTRIBUTES = [
   { location: 0, size: 3, offset: 0 },
   { location: 1, size: 2, offset: 3 },
-  { location: 2, size: 4, offset: 5 },
-  { location: 3, size: 4, offset: 9 },
-  { location: 4, size: 1, offset: 13 },
-  { location: 5, size: 4, offset: 14 },
-  { location: 6, size: 3, offset: 18 },
-  { location: 7, size: 3, offset: 21 },
 ];
+
+/** 壁 1 枚あたりのテクセル数（RGBA32F） */
+export const WALL_SEGMENT_TEXELS = 5;
+/** 壁ごとの値（floats、WALL_SEGMENT_TEXELS × 4）。シェーダの wallTexel() と合わせること */
+export const WALL_SEGMENT_FLOATS = WALL_SEGMENT_TEXELS * 4;
+// 0-1 tangent | 2 runLength（負 = 角のない閉じた面） | 3 runSeed
+// 4 style | 5 bSeed | 6 floorHeight | 7 category
+// 8 height | 9 clearance（前面のあき m） | 10 sunSide | 11 coverHeight（前面をふさぐ建物の高さ m）
+// 12 age（築年数 0–1、不明は -1） | 13 ground（タイル内の建物の番号。地形の標高を引く。FacadeMesh.grounds を参照）
+// 14 balconyFrom（バルコニーを付ける最初の階。0 = なし） | 15 balconyDepth（奥行き m。正 = 外壁、負 = 引っ込んだ壁、0 = なし）
+// 16 runKey・17 buildingKey（1 階の構成を決める 24 ビットの整数。Frontage.ts） | 18 flags（1 = 入口のある連続面, 2 = 勾配屋根）
+// 19 bottom（建物の下端の高さ。頂点の z から引いて壁の高さ方向の座標にする）
+// 勾配屋根の建物は 8 height が軒までの高さで、上端は屋根面に合わせる（切妻の妻側は三角）
+/** 壁ごとの値を入れるテクスチャの幅（テクセル）。壁 s の k 番目は線形の番号 s × WALL_SEGMENT_TEXELS + k */
+export const WALL_SEGMENT_TEXTURE_WIDTH = 2048;
+/** 壁ごとの値の名前 → 番号（テストなどで読むとき用） */
+export const WALL_SEGMENT = {
+  tangentX: 0, tangentY: 1, runLength: 2, runSeed: 3, style: 4, bSeed: 5, floorHeight: 6, category: 7,
+  height: 8, clearance: 9, sunSide: 10, coverHeight: 11, age: 12, ground: 13, balconyFrom: 14, balconyDepth: 15,
+  runKey: 16, buildingKey: 17, flags: 18, bottom: 19,
+} as const;
 
 /** バルコニーの床・天井・袖壁・隔て板の頂点（floats） */
 export const BALCONY_STRIDE = 15;
@@ -124,6 +137,8 @@ export interface FacadeMesh {
   reference: MeshReference;
   walls: Float32Array;
   wallIndices: Uint32Array;
+  /** 壁ごとの値（WALL_SEGMENT_FLOATS ごと）。WALL_SEGMENT_TEXTURE_WIDTH テクセルの行の単位で末尾を 0 で埋めてある */
+  wallSegments: Float32Array;
   roofs: Float32Array;
   roofIndices: Uint32Array;
   equipment: Float32Array;

@@ -17,6 +17,7 @@ import {
   ROOF_ATTRIBUTES,
   ROOF_STRIDE,
   WALL_ATTRIBUTES,
+  WALL_SEGMENT_TEXTURE_WIDTH,
   WALL_STRIDE,
   type MeshReference,
 } from '../mesh/layout';
@@ -51,7 +52,7 @@ import { STYLE_TEXELS, balconyLayout, frontageLayout, packStyle, pitchedRoofLayo
 import { DEFAULT_STYLE_RULES, PRESET_STYLES } from '../style/presets';
 import type { StyleRule } from '../style/StyleResolver';
 import { computeFog, NO_FOG, type FogUniforms } from '../terrain/Fog';
-import { createTileGround, deleteTileGround, sampleTileGround, terrainElevation, type TileGround } from '../terrain/Ground';
+import { createTileGround, deleteTileGround, sampleTileGround, terrainElevation, withPlainUnpack, type TileGround } from '../terrain/Ground';
 import { createBuildingWorker } from '../worker/createWorker';
 import { markStaleNeighbors } from './staleNeighbors';
 import { type BuildingStats, type InitRequest, type TileTiming, type WorkerRequest, type WorkerResponse } from '../worker/protocol';
@@ -215,6 +216,8 @@ interface MaterialGpu {
 interface TileGpu {
   reference: MeshReference;
   walls: MeshBuffers;
+  /** 壁ごとの値（RGBA32F、WALL_SEGMENT_TEXTURE_WIDTH × 行数） */
+  wallSegments: WebGLTexture;
   roofs: MeshBuffers;
   equipment: MeshBuffers & { instanceCount: number };
   lights: MeshBuffers;
@@ -693,6 +696,7 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
       gl.uniform1f(u.u_parapetHeight, effects && roof.parapet.enabled ? roof.parapet.height : 0);
       gl.uniform1f(u.u_effects, effects ? 1 : 0);
       gl.uniform1i(u.u_ground, 2);
+      gl.uniform1i(u.u_segments, 3);
       gl.uniform2fv(u.u_fogRange, fog.range);
       gl.uniform4fv(u.u_fogColor, fog.color);
       gl.uniform4fv(u.u_fogHorizon, fog.horizon);
@@ -707,6 +711,8 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
         gl.uniform3fv(p.uniforms.u_eye, t.eye);
         gl.activeTexture(gl.TEXTURE2);
         gl.bindTexture(gl.TEXTURE_2D, t.ground.texture);
+        gl.activeTexture(gl.TEXTURE3);
+        gl.bindTexture(gl.TEXTURE_2D, t.wallSegments);
         gl.activeTexture(gl.TEXTURE0);
         draw(t);
       }
@@ -1103,6 +1109,7 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
     entry.gpu = {
       reference: mesh.reference,
       walls: createMesh(gl, mesh.walls, mesh.wallIndices, WALL_STRIDE, WALL_ATTRIBUTES),
+      wallSegments: createWallSegmentTexture(gl, mesh.wallSegments),
       roofs: createMesh(gl, mesh.roofs, mesh.roofIndices, ROOF_STRIDE, ROOF_ATTRIBUTES),
       equipment: createInstancedMesh(gl, unitBox(), { data: mesh.equipment, stride: EQUIPMENT_STRIDE, attributes: EQUIPMENT_ATTRIBUTES }),
       lights: createPointMesh(gl, mesh.lights, LIGHT_STRIDE, LIGHT_ATTRIBUTES),
@@ -1214,7 +1221,22 @@ function uploadMaterials(gl: WebGL2RenderingContext, mat: MaterialGpu, textures:
 
 function deleteTileGpu(gl: WebGL2RenderingContext, t: TileGpu): void {
   for (const mesh of [t.walls, t.roofs, t.equipment, t.lights, t.balconies, t.fixtures, t.pitchedRoofs]) deleteMesh(gl, mesh);
+  gl.deleteTexture(t.wallSegments);
   deleteTileGround(gl, t.ground);
+}
+
+/** 壁ごとの値のテクスチャ。Worker が行の単位で埋めた配列をそのまま送る */
+function createWallSegmentTexture(gl: WebGL2RenderingContext, data: Float32Array): WebGLTexture {
+  const texture = gl.createTexture();
+  if (!texture) throw new Error('Failed to create wall segment texture');
+  const rows = data.length / (WALL_SEGMENT_TEXTURE_WIDTH * 4);
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  withPlainUnpack(gl, () => gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, WALL_SEGMENT_TEXTURE_WIDTH, rows, 0, gl.RGBA, gl.FLOAT, data));
+  return texture;
 }
 
 /** タイルごとの統計を合計する */

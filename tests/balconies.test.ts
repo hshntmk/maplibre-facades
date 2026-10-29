@@ -6,6 +6,7 @@ import { firstBalconyFloor, floorBase, floorLayout, runColumns, type BalconyLayo
 import { DEFAULT_EXPOSURE_THRESHOLDS, type SegmentFacade } from '../src/mesh/FacadeAnalyzer';
 import { FacadeMeshBuilder, WALL_STRIDE, createReference } from '../src/mesh/FacadeMeshBuilder';
 import { BALCONY_CEILING_DROP, BALCONY_FLOOR, BALCONY_PARTS, BALCONY_STRIDE } from '../src/mesh/layout';
+import { wallVertex } from './wallVertex';
 import { balconyLayout } from '../src/style/FacadeStyle';
 import { PRESET_STYLES } from '../src/style/presets';
 
@@ -85,18 +86,18 @@ describe('FacadeMeshBuilder balconies', () => {
     const floors = floorLayout(20, record.floorHeight ?? 3.2, false);
     // 外壁 4 枚 + 日当たり面（南）の引っ込んだ壁 1 枚
     expect(mesh.walls.length / WALL_STRIDE).toBe(20);
-    const wall = (q: number, k: number) => mesh.walls[(q * 4) * WALL_STRIDE + k];
+    const wall = (q: number) => wallVertex(mesh, q * 4);
     // 南の外壁はバルコニーあり（2 階から、奥行き +1.5）、他の外壁はなし
-    expect([wall(0, 19), wall(0, 20)]).toEqual([1, 1.5]);
-    expect([wall(1, 20), wall(2, 20), wall(3, 20)]).toEqual([0, 0, 0]);
+    expect([wall(0).balconyFrom, wall(0).balconyDepth]).toEqual([1, 1.5]);
+    expect([wall(1).balconyDepth, wall(2).balconyDepth, wall(3).balconyDepth]).toEqual([0, 0, 0]);
     // 引っ込んだ壁は外壁の 1.5m 内側（北）で、2 階の床から最上階の天井まで
-    const inner = 4 * 4 * WALL_STRIDE;
-    expect(mesh.walls[inner + 20]).toBe(-1.5);
-    expect(mesh.walls[inner + 1]).toBeCloseTo(1.5, 3);
-    expect(mesh.walls[inner + 2]).toBeCloseTo(floorBase(floors, 1), 3);
-    expect(mesh.walls[inner + 2 * WALL_STRIDE + 2]).toBeCloseTo(floorBase(floors, floors.floors - 1) + floors.upperHeight, 3);
+    const inner = wall(4);
+    expect(inner.balconyDepth).toBe(-1.5);
+    expect(inner.y).toBeCloseTo(1.5, 3);
+    expect(inner.z).toBeCloseTo(floorBase(floors, 1), 3);
+    expect(wallVertex(mesh, 4 * 4 + 2).z).toBeCloseTo(floorBase(floors, floors.floors - 1) + floors.upperHeight, 3);
     // 窓の位置がそろうよう、u は外壁と同じ（両端の余白の内側）
-    expect(mesh.walls[inner + 3]).toBeCloseTo(0.45, 3);
+    expect(inner.u).toBeCloseTo(0.45, 3);
 
     // 2 階から最上階まで、階ごとに床・天井・両端の袖壁（間口 9m では隔て板なし）
     const quads = mesh.balconies.length / BALCONY_STRIDE / 4;

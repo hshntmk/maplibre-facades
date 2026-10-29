@@ -5,6 +5,7 @@ import { enrich } from '../src/enrich/Enricher';
 import type { FootprintGeometry } from '../src/model/BuildingRecord';
 import { FacadeMeshBuilder, ROOF_STRIDE, WALL_STRIDE, createReference } from '../src/mesh/FacadeMeshBuilder';
 import { GROUND_STRIDE } from '../src/mesh/layout';
+import { wallVertex, wallVertexCount } from './wallVertex';
 import { DEFAULT_STYLE_RULES, PRESET_STYLES } from '../src/style/presets';
 import { StyleResolver } from '../src/style/StyleResolver';
 import { runBuildPipeline } from '../src/worker/buildPipeline';
@@ -115,14 +116,16 @@ describe('FacadeMeshBuilder', () => {
     expect(mesh.wallIndices.length).toBe(24);
     expect(mesh.roofIndices.length).toBe(6);
     // 最初の辺（南側、西→東）の外向き法線 (ty, -tx) は南向き
-    const tx = mesh.walls[5];
-    const ty = mesh.walls[6];
-    expect(tx).toBeCloseTo(1, 3);
-    expect(-tx).toBeLessThan(0);
-    expect(ty).toBeCloseTo(0, 3);
+    const first = wallVertex(mesh, 0);
+    expect(first.tangentX).toBeCloseTo(1, 3);
+    expect(-first.tangentX).toBeLessThan(0);
+    expect(first.tangentY).toBeCloseTo(0, 3);
     // 壁の長さ ≈ 0.0001° × 経度方向の距離
-    expect(mesh.walls[7]).toBeGreaterThan(8.5);
-    expect(mesh.walls[7]).toBeLessThan(9.5);
+    expect(first.runLength).toBeGreaterThan(8.5);
+    expect(first.runLength).toBeLessThan(9.5);
+    // 壁ごとの値は 1 枚に 1 つ（4 頂点で共有）
+    expect(mesh.wallSegments.length).toBeGreaterThanOrEqual(4 * 20);
+    expect(wallVertex(mesh, 3).runLength).toBe(first.runLength);
   });
 
   it('numbers buildings for terrain elevation and gives their bounding boxes', () => {
@@ -142,9 +145,9 @@ describe('FacadeMeshBuilder', () => {
     expect(minY).toBeCloseTo(0, 3);
     expect(maxX).toBeGreaterThan(8.5);
     expect(maxY).toBeGreaterThan(10.5);
-    // 頂点の 18 番目の値が建物の番号
+    // 壁ごとの値の ground が建物の番号
     const wallSlots = new Set<number>();
-    for (let i = 18; i < mesh.walls.length; i += WALL_STRIDE) wallSlots.add(mesh.walls[i]);
+    for (let i = 0; i < wallVertexCount(mesh); i++) wallSlots.add(wallVertex(mesh, i).ground);
     expect([...wallSlots].sort()).toEqual([0, 1]);
     // タイルの半径: 基準点（1 つ目の南西の角）から 2 つ目の建物の北東の角まで（約 100m 東、11m 北）
     expect(mesh.radius).toBeGreaterThan(95);

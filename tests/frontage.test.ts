@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createAdapter } from '../src/adapters/registry';
 import { enrich } from '../src/enrich/Enricher';
 import type { FootprintGeometry } from '../src/model/BuildingRecord';
-import { FacadeMeshBuilder, WALL_STRIDE, createReference } from '../src/mesh/FacadeMeshBuilder';
+import { FacadeMeshBuilder, createReference } from '../src/mesh/FacadeMeshBuilder';
 import {
   FIXTURE_PARTS,
   GROUND_MODES,
@@ -17,6 +17,7 @@ import {
   type FrontageLayout,
 } from '../src/mesh/Frontage';
 import { FIXTURE_STRIDE } from '../src/mesh/layout';
+import { wallVertex, wallVertexCount } from './wallVertex';
 import { frontageLayout } from '../src/style/FacadeStyle';
 import { PRESET_STYLES } from '../src/style/presets';
 
@@ -106,10 +107,11 @@ describe('FacadeMeshBuilder frontage', () => {
     const mesh = build([layout(GROUND_MODES.lobby)]);
     const entrance = new Set<number>();
     const keys = new Set<number>();
-    for (let i = 0; i < mesh.walls.length; i += WALL_STRIDE) {
-      entrance.add(mesh.walls[i + 23]);
-      keys.add(mesh.walls[i + 22]);
-      expect(Number.isInteger(mesh.walls[i + 21])).toBe(true);
+    for (let i = 0; i < wallVertexCount(mesh); i++) {
+      const w = wallVertex(mesh, i);
+      entrance.add(w.flags);
+      keys.add(w.buildingKey);
+      expect(Number.isInteger(w.runKey)).toBe(true);
     }
     expect([...entrance].sort()).toEqual([0, 1]);
     expect([...keys]).toEqual([keyOf('shop')]);

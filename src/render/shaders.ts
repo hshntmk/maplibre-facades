@@ -1,6 +1,6 @@
 // GLSL ES 3.00。頂点レイアウトは mesh/layout.ts、スタイルのテクセル配置は style/FacadeStyle.ts と合わせること。
 import { AWNING_COLORS, PILLAR, SHOP, SHOP_SHARES, SIGN_COLORS } from '../mesh/Frontage';
-import { BALCONY_CEILING_DROP, BALCONY_FLOOR, BALCONY_RAIL, GROUND_TEXTURE_WIDTH } from '../mesh/layout';
+import { BALCONY_CEILING_DROP, BALCONY_FLOOR, BALCONY_RAIL, GROUND_TEXTURE_WIDTH, WALL_SEGMENT_TEXELS, WALL_SEGMENT_TEXTURE_WIDTH } from '../mesh/layout';
 import { ROOF_COLORS } from '../mesh/PitchedRoof';
 
 const glslFloat = (v: number) => (Number.isInteger(v) ? v.toFixed(1) : String(v));
@@ -23,6 +23,15 @@ float groundOf(float slot) {
 float fogDepth(vec4 clip) {
   float n = u_fogRange.x, f = u_fogRange.y;
   return ((f + n) / (f - n) - 2.0 * f * n / ((f - n) * max(clip.w, 1e-3))) * 0.5 + 0.5;
+}
+`;
+
+/** 壁の頂点シェーダ共通: 壁ごとの値（mesh/layout.ts の WALL_SEGMENT_FLOATS の並び）をテクスチャから引く */
+const WALL_SEGMENT_VS = /* glsl */ `
+uniform highp sampler2D u_segments;
+vec4 wallTexel(int segment, int k) {
+  int i = segment * ${WALL_SEGMENT_TEXELS} + k;
+  return texelFetch(u_segments, ivec2(i % ${WALL_SEGMENT_TEXTURE_WIDTH}, i / ${WALL_SEGMENT_TEXTURE_WIDTH}), 0);
 }
 `;
 
@@ -216,14 +225,9 @@ export const FACADE_VS = /* glsl */ `#version 300 es
 precision highp float;
 uniform mat4 u_matrix;
 layout(location = 0) in vec3 a_pos;
-layout(location = 1) in vec2 a_uv;
-layout(location = 2) in vec4 a_seg;     // tangent.xy, runLength（負 = 閉じた面）, runSeed
-layout(location = 3) in vec4 a_bldg;    // style, bSeed, floorHeight, category
-layout(location = 4) in float a_height;
-layout(location = 5) in vec4 a_facade;  // clearance, sunSide, coverHeight, age
-layout(location = 6) in vec3 a_ext;     // ground, balconyFrom, balconyDepth
-layout(location = 7) in vec3 a_keys;    // runKey, buildingKey, entrance
+layout(location = 1) in vec2 a_wall;    // u（連続面に沿った距離 m）, segment（壁の番号）
 ${GROUND_VS}
+${WALL_SEGMENT_VS}
 out vec3 v_world;
 out vec2 v_uv;
 flat out vec4 v_seg;
@@ -233,15 +237,19 @@ flat out vec4 v_facade;
 flat out vec2 v_balcony;
 flat out vec3 v_keys;
 void main() {
-  vec3 p = a_pos + vec3(0.0, 0.0, groundOf(a_ext.x));
-  v_balcony = a_ext.yz;
-  v_keys = a_keys;
+  int segment = int(a_wall.y + 0.5);
+  vec4 t2 = wallTexel(segment, 2);  // height, clearance, sunSide, coverHeight
+  vec4 t3 = wallTexel(segment, 3);  // age, ground, balconyFrom, balconyDepth
+  vec4 t4 = wallTexel(segment, 4);  // runKey, buildingKey, flags, bottom
+  vec3 p = a_pos + vec3(0.0, 0.0, groundOf(t3.y));
+  v_balcony = t3.zw;
+  v_keys = t4.xyz;
   v_world = p;
-  v_uv = a_uv;
-  v_seg = a_seg;
-  v_bldg = a_bldg;
-  v_height = a_height;
-  v_facade = a_facade;
+  v_uv = vec2(a_wall.x, a_pos.z - t4.w);
+  v_seg = wallTexel(segment, 0);
+  v_bldg = wallTexel(segment, 1);
+  v_height = t2.x;
+  v_facade = vec4(t2.yzw, t3.x);
   gl_Position = u_matrix * vec4(p, 1.0);
   v_fogDepth = fogDepth(gl_Position);
 }
@@ -1299,32 +1307,35 @@ export const PARAPET_VS = /* glsl */ `#version 300 es
 ${COMMON}
 uniform mat4 u_matrix;
 layout(location = 0) in vec3 a_pos;
-layout(location = 1) in vec2 a_uv;
-layout(location = 2) in vec4 a_seg;     // tangent.xy, runLength, runSeed
-layout(location = 3) in vec4 a_bldg;    // style, bSeed, floorHeight, category
-layout(location = 4) in float a_height;
-layout(location = 6) in vec3 a_ext;     // ground, balconyFrom, balconyDepth
-layout(location = 7) in vec3 a_keys;    // runKey, buildingKey, flags（2 = 勾配屋根）
+layout(location = 1) in vec2 a_wall;    // u, segment（壁の番号）
 ${GROUND_VS}
+${WALL_SEGMENT_VS}
 out vec3 v_world;
 out float v_t;                           // 0 = 屋上面, 1 = パラペットの天端
 flat out vec3 v_normal;                  // 内向き
 flat out vec3 v_attr;                    // style, bSeed, category
 void main() {
+  int segment = int(a_wall.y + 0.5);
+  vec4 t3 = wallTexel(segment, 3);  // age, ground, balconyFrom, balconyDepth
+  vec4 t4 = wallTexel(segment, 4);  // runKey, buildingKey, flags, bottom
   // バルコニーの引っ込んだ壁と勾配屋根の建物にはパラペットがない（画面の外に出して描かない）
-  if (a_ext.z < 0.0 || a_keys.z > 1.5) {
+  if (t3.w < 0.0 || t4.z > 1.5) {
     gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
     return;
   }
-  int sid = int(a_bldg.x + 0.5);
-  float drop = parapetDrop(sid, a_height);
-  float top = a_pos.z - a_uv.y + a_height;
-  bool isTop = a_uv.y > a_height * 0.5;
-  vec3 p = vec3(a_pos.xy, (isTop ? top : top - drop) + groundOf(a_ext.x));
+  vec4 seg = wallTexel(segment, 0);   // tangent.xy, runLength, runSeed
+  vec4 bldg = wallTexel(segment, 1);  // style, bSeed, floorHeight, category
+  float height = wallTexel(segment, 2).x;
+  int sid = int(bldg.x + 0.5);
+  float drop = parapetDrop(sid, height);
+  float v = a_pos.z - t4.w;
+  float top = t4.w + height;
+  bool isTop = v > height * 0.5;
+  vec3 p = vec3(a_pos.xy, (isTop ? top : top - drop) + groundOf(t3.y));
   v_world = p;
   v_t = isTop ? 1.0 : 0.0;
-  v_normal = vec3(-a_seg.y, a_seg.x, 0.0);
-  v_attr = vec3(a_bldg.x, a_bldg.y, a_bldg.w);
+  v_normal = vec3(-seg.y, seg.x, 0.0);
+  v_attr = vec3(bldg.x, bldg.y, bldg.w);
   // パラペットがない建物は面積 0 の四角形になり、何も描かれない
   gl_Position = u_matrix * vec4(p, 1.0);
   v_fogDepth = fogDepth(gl_Position);

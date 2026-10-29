@@ -5,6 +5,7 @@ import type { FootprintGeometry } from '../src/model/BuildingRecord';
 import type { Point } from '../src/mesh/FacadeAnalyzer';
 import { FacadeMeshBuilder, WALL_STRIDE, createReference } from '../src/mesh/FacadeMeshBuilder';
 import { PITCHED_ROOF_STRIDE } from '../src/mesh/layout';
+import { wallVertex, wallVertexCount } from './wallVertex';
 import { minAreaRect, planPitchedRoof, ridgeSplits, roofSurfaceHeight, type PitchedRoofLayout, type RoofPlan } from '../src/mesh/PitchedRoof';
 import { pitchedRoofLayout } from '../src/style/FacadeStyle';
 import { PRESET_STYLES } from '../src/style/presets';
@@ -95,16 +96,17 @@ describe('FacadeMeshBuilder pitched roofs', () => {
     // 妻側の 2 枚は棟で分かれるので、外壁は 6 枚
     expect(mesh.walls.length / WALL_STRIDE).toBe(24);
     const tops: number[] = [];
-    for (let i = 0; i < mesh.walls.length; i += WALL_STRIDE) {
-      expect(mesh.walls[i + 23] & 2).toBe(2); // 勾配屋根の印（1 は入口のある面）
-      tops.push(mesh.walls[i + 2]);
+    for (let i = 0; i < wallVertexCount(mesh); i++) {
+      const w = wallVertex(mesh, i);
+      expect(w.flags & 2).toBe(2); // 勾配屋根の印（1 は入口のある面）
+      tops.push(w.z);
     }
     expect(Math.max(...tops)).toBeCloseTo(8, 3);
-    const eave = mesh.walls[13]; // 軒までの高さ
+    const eave = wallVertex(mesh, 0).height; // 軒までの高さ
     expect(eave).toBeLessThan(8);
     expect(eave).toBeGreaterThanOrEqual(2.4);
     // 階高は軒までの高さを 2 階で割った値
-    expect(mesh.walls[11]).toBeCloseTo(eave / 2, 3);
+    expect(wallVertex(mesh, 0).floorHeight).toBeCloseTo(eave / 2, 3);
   });
 
   it('keeps the flat roof without a layout', () => {
