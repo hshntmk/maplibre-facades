@@ -22,7 +22,7 @@ import {
   type MeshReference,
 } from '../mesh/layout';
 import { BUILDING_CATEGORIES } from '../model/BuildingRecord';
-import { createInstancedMesh, createMesh, createPointMesh, createProgram, deleteMesh, unitBox, type MeshBuffers, type Program } from '../render/gl';
+import { createIndexView, createInstancedMesh, createMesh, createPointMesh, createProgram, deleteMesh, unitBox, type MeshBuffers, type Program } from '../render/gl';
 import {
   BALCONY_FS,
   BALCONY_VS,
@@ -218,6 +218,8 @@ interface TileGpu {
   walls: MeshBuffers;
   /** 壁ごとの値（RGBA32F、WALL_SEGMENT_TEXTURE_WIDTH × 行数） */
   wallSegments: WebGLTexture;
+  /** パラペットの内側を描く壁（walls の頂点を共有） */
+  parapets: MeshBuffers;
   roofs: MeshBuffers;
   equipment: MeshBuffers & { instanceCount: number };
   lights: MeshBuffers;
@@ -767,12 +769,13 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
       }, DETAIL_MIN_PX_PER_METER.fixtures);
     }
 
-    // パラペットの内側（外壁と同じ頂点を使う）
-    if (effects) {
+    // パラペットの内側（陸屋根の外壁の頂点を使う）
+    if (effects && roof.parapet.enabled) {
       use(programs.parapet);
       forEachTile(programs.parapet, (t) => {
-        gl.bindVertexArray(t.walls.vao);
-        gl.drawElements(gl.TRIANGLES, t.walls.count, gl.UNSIGNED_INT, 0);
+        if (t.parapets.count === 0) return;
+        gl.bindVertexArray(t.parapets.vao);
+        gl.drawElements(gl.TRIANGLES, t.parapets.count, gl.UNSIGNED_INT, 0);
       }, DETAIL_MIN_PX_PER_METER.parapet);
     }
 
@@ -1106,10 +1109,12 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
 
     if (entry.gpu) deleteTileGpu(gl, entry.gpu);
     const { mesh, stats } = msg;
+    const walls = createMesh(gl, mesh.walls, mesh.wallIndices, WALL_STRIDE, WALL_ATTRIBUTES);
     entry.gpu = {
       reference: mesh.reference,
-      walls: createMesh(gl, mesh.walls, mesh.wallIndices, WALL_STRIDE, WALL_ATTRIBUTES),
+      walls,
       wallSegments: createWallSegmentTexture(gl, mesh.wallSegments),
+      parapets: createIndexView(gl, walls, mesh.parapetIndices, WALL_STRIDE, WALL_ATTRIBUTES),
       roofs: createMesh(gl, mesh.roofs, mesh.roofIndices, ROOF_STRIDE, ROOF_ATTRIBUTES),
       equipment: createInstancedMesh(gl, unitBox(), { data: mesh.equipment, stride: EQUIPMENT_STRIDE, attributes: EQUIPMENT_ATTRIBUTES }),
       lights: createPointMesh(gl, mesh.lights, LIGHT_STRIDE, LIGHT_ATTRIBUTES),
@@ -1220,7 +1225,7 @@ function uploadMaterials(gl: WebGL2RenderingContext, mat: MaterialGpu, textures:
 }
 
 function deleteTileGpu(gl: WebGL2RenderingContext, t: TileGpu): void {
-  for (const mesh of [t.walls, t.roofs, t.equipment, t.lights, t.balconies, t.fixtures, t.pitchedRoofs]) deleteMesh(gl, mesh);
+  for (const mesh of [t.walls, t.parapets, t.roofs, t.equipment, t.lights, t.balconies, t.fixtures, t.pitchedRoofs]) deleteMesh(gl, mesh);
   gl.deleteTexture(t.wallSegments);
   deleteTileGround(gl, t.ground);
 }

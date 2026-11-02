@@ -123,6 +123,7 @@ export class FacadeMeshBuilder {
     const walls = new GrowableF32();
     const wallIdx = new GrowableU32();
     const segments = new GrowableF32();
+    const parapetIdx = new GrowableU32();
     const roofs = new GrowableF32();
     const roofIdx = new GrowableU32();
     const equipment = new GrowableF32();
@@ -252,6 +253,8 @@ export class FacadeMeshBuilder {
             v(b[0], b[1], zTopB, uB);
             v(a[0], a[1], zTop, uA);
             wallIdx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+            // パラペットの内側は陸屋根の外壁だけ（勾配屋根とバルコニーの引っ込んだ壁にはない）
+            if (!roofPlan && balconyDepth >= 0) parapetIdx.push(base, base + 1, base + 2, base, base + 2, base + 3);
           };
           for (let i = 0; i < ring.length; i++) {
             const len = segmentLength(i);
@@ -327,6 +330,7 @@ export class FacadeMeshBuilder {
       walls: walls.result(),
       wallIndices: wallIdx.result(),
       wallSegments: padRows(segments, WALL_SEGMENT_TEXTURE_WIDTH * 4),
+      parapetIndices: parapetIdx.result(),
       roofs: roofs.result(),
       roofIndices: roofIdx.result(),
       equipment: equipment.result(),

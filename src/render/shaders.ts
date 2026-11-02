@@ -846,7 +846,9 @@ void main() {
   float age = v_facade.w >= 0.0 ? v_facade.w : mix(0.2, 1.0, hash12(vec2(bSeed * 19.0, 6.3)));
   float dirt = u_weathering.x * styleTexel(sid, 20).x * age;
   float grime = 0.0;  // 汚れの量（素材のつやを落とす）
-  if (dirt > 0.0) {
+  // ガラスに完全に隠れる所（窓の内側。手すりの縁と遠景の平均色では壁の色を使うので除く）は、汚れも素材も描かない
+  bool hidden = hasWindow && dist < -fw && detail >= 1.0 && (balcony <= 0.0 || cy >= 0.2);
+  if (dirt > 0.0 && !hidden) {
     vec2 wseed = vec2(bSeed * 211.0, runSeed * 97.0);
     // 細かい模様（窓台の雨だれ、縦筋のむら、しみの縁と濃さのむら）は、窓 1 枚分が数ピクセルより小さい遠景では
     // 1 ピクセルより細かいので、平均の値に置き換えてノイズを計算しない（detail で近景の模様へなめらかにつなぐ）
@@ -891,8 +893,6 @@ void main() {
   // 微分は分岐の前で求める（分岐の中では未定義）
   vec2 mgx = dFdx(muv), mgy = dFdy(muv);
   vec3 wallColor = toLinear(wallAlbedo) * wallLight;
-  // ガラスに完全に隠れる所（窓の内側。手すりの縁と遠景の平均色では壁の色を使うので除く）は素材を描かない
-  bool hidden = hasWindow && dist < -fw && detail >= 1.0 && (balcony <= 0.0 || cy >= 0.2);
   if (material >= 0 && u_surface.x > 0.0 && !hidden) {
     float k = u_surface.x;
     // ミップの段（1 ピクセルに入るテクセル数の log2）。目地が 1 ピクセルより細くなる距離からは、

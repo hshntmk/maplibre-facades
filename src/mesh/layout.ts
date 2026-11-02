@@ -139,6 +139,8 @@ export interface FacadeMesh {
   wallIndices: Uint32Array;
   /** 壁ごとの値（WALL_SEGMENT_FLOATS ごと）。WALL_SEGMENT_TEXTURE_WIDTH テクセルの行の単位で末尾を 0 で埋めてある */
   wallSegments: Float32Array;
+  /** パラペットの内側を描く壁（陸屋根の外壁）の四角形。walls の頂点を使う */
+  parapetIndices: Uint32Array;
   roofs: Float32Array;
   roofIndices: Uint32Array;
   equipment: Float32Array;

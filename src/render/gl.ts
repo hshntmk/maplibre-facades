@@ -63,6 +63,28 @@ export function createMesh(
   return { vao, buffers: [vbo, ibo], count: indices.length };
 }
 
+/** 別のメッシュの頂点を共有し、インデックスだけ違う VAO（頂点のバッファは base が持つので、こちらの buffers には入れない） */
+export function createIndexView(
+  gl: WebGL2RenderingContext,
+  base: MeshBuffers,
+  indices: Uint32Array,
+  stride: number,
+  attributes: { location: number; size: number; offset: number }[],
+): MeshBuffers {
+  const vao = gl.createVertexArray()!;
+  gl.bindVertexArray(vao);
+  gl.bindBuffer(gl.ARRAY_BUFFER, base.buffers[0]);
+  for (const a of attributes) {
+    gl.enableVertexAttribArray(a.location);
+    gl.vertexAttribPointer(a.location, a.size, gl.FLOAT, false, stride * 4, a.offset * 4);
+  }
+  const ibo = gl.createBuffer()!;
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
+  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
+  gl.bindVertexArray(null);
+  return { vao, buffers: [ibo], count: indices.length };
+}
+
 export function deleteMesh(gl: WebGL2RenderingContext, mesh: MeshBuffers): void {
   gl.deleteVertexArray(mesh.vao);
   for (const b of mesh.buffers) gl.deleteBuffer(b);
