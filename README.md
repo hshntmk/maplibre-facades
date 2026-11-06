@@ -169,8 +169,6 @@ npm run demo:build     # デモを examples/chiyoda/dist に出力
 | `src/worker/` | Worker 本体、パイプライン、タイルの保存（IndexedDB） |
 | `examples/chiyoda/` | デモ |
 
-main に push すると、GitHub Actions（`.github/workflows/pages.yml`）が型チェック・テスト・ビルドをしてデモを GitHub Pages に公開します。GeoJSON 版のデータはリポジトリに入れていないので、公開版のデモで選べるのは 3D Tiles だけです。
-
 ## ライセンス
 
 [MIT](LICENSE)
