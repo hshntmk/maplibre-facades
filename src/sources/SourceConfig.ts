@@ -36,6 +36,10 @@ export interface Tiles3DSourceConfig {
    * 建物と同じく表示範囲のタイルだけを読み、木として描く
    */
   vegetation?: string | string[];
+  /**
+   * 都市設備モデル（LOD1）の tileset.json の URL。いまは交通信号機（と、灯器を取り付けた柱）だけを描く
+   */
+  cityFurniture?: string | string[];
 }
 
 export interface TileCacheOptions {

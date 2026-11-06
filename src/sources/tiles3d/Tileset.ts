@@ -70,6 +70,9 @@ async function fetchJson(url: string): Promise<{ root: TileJson; geometricError?
 /** 植生のタイルセットのタイル ID の先頭 */
 export const VEGETATION_PREFIX = 'v';
 export const isVegetationTile = (id: string): boolean => id.startsWith(VEGETATION_PREFIX);
+/** 都市設備のタイルセットのタイル ID の先頭 */
+export const FURNITURE_PREFIX = 'f';
+export const isFurnitureTile = (id: string): boolean => id.startsWith(FURNITURE_PREFIX);
 
 export interface Tileset {
   url: string;
@@ -125,14 +128,16 @@ export async function loadTileset(url: string, idPrefix = 'r'): Promise<Tileset>
 export async function loadTilesets(
   urls: string[],
   vegetationUrls: string[] = [],
+  furnitureUrls: string[] = [],
 ): Promise<{ tileset: Tileset; failures: { url: string; error: unknown }[] }> {
-  if (urls.length === 1 && !vegetationUrls.length) return { tileset: await loadTileset(urls[0]), failures: [] };
-  // 植生のタイルセットのタイル ID は VEGETATION_PREFIX で始める（メインスレッドが植生のタイルとして Worker に依頼する）
+  if (urls.length === 1 && !vegetationUrls.length && !furnitureUrls.length) return { tileset: await loadTileset(urls[0]), failures: [] };
+  // 植生・都市設備のタイルセットのタイル ID は VEGETATION_PREFIX・FURNITURE_PREFIX で始める（メインスレッドがそれぞれのタイルとして Worker に依頼する）
   const results = await Promise.allSettled([
     ...urls.map((u, i) => loadTileset(u, `t${i}`)),
     ...vegetationUrls.map((u, i) => loadTileset(u, `${VEGETATION_PREFIX}${i}`)),
+    ...furnitureUrls.map((u, i) => loadTileset(u, `${FURNITURE_PREFIX}${i}`)),
   ]);
-  urls = [...urls, ...vegetationUrls];
+  urls = [...urls, ...vegetationUrls, ...furnitureUrls];
   const loaded: Tileset[] = [];
   const failures: { url: string; error: unknown }[] = [];
   results.forEach((r, i) => (r.status === 'fulfilled' ? loaded.push(r.value) : failures.push({ url: urls[i], error: r.reason })));

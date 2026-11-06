@@ -191,8 +191,8 @@ export function treeMesh(): { vertices: Float32Array; indices: Uint16Array; stri
   };
 }
 
-/** 底面のない単位立方体（x, y: -0.5..0.5, z: 0..1）。頂点は位置 + 法線 */
-export function unitBox(): { vertices: Float32Array; indices: Uint16Array; stride: number; attributes: Attribute[] } {
+/** 単位立方体（x, y: -0.5..0.5, z: 0..1）。既定では底面がない。頂点は位置 + 法線 */
+export function unitBox(bottom = false): { vertices: Float32Array; indices: Uint16Array; stride: number; attributes: Attribute[] } {
   const faces: { n: [number, number, number]; c: [number, number, number][] }[] = [
     { n: [0, 0, 1], c: [[-0.5, -0.5, 1], [0.5, -0.5, 1], [0.5, 0.5, 1], [-0.5, 0.5, 1]] },
     { n: [1, 0, 0], c: [[0.5, -0.5, 0], [0.5, 0.5, 0], [0.5, 0.5, 1], [0.5, -0.5, 1]] },
@@ -200,6 +200,7 @@ export function unitBox(): { vertices: Float32Array; indices: Uint16Array; strid
     { n: [0, 1, 0], c: [[0.5, 0.5, 0], [-0.5, 0.5, 0], [-0.5, 0.5, 1], [0.5, 0.5, 1]] },
     { n: [0, -1, 0], c: [[-0.5, -0.5, 0], [0.5, -0.5, 0], [0.5, -0.5, 1], [-0.5, -0.5, 1]] },
   ];
+  if (bottom) faces.push({ n: [0, 0, -1], c: [[-0.5, 0.5, 0], [0.5, 0.5, 0], [0.5, -0.5, 0], [-0.5, -0.5, 0]] });
   const v: number[] = [];
   const idx: number[] = [];
   faces.forEach((f, i) => {

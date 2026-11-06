@@ -1794,6 +1794,154 @@ void main() {
 }
 `);
 
+/** 信号機の灯器・柱・腕木。底面のある単位立方体をインスタンスごとに拡大・回転して置く */
+export const SIGNAL_VS = /* glsl */ `#version 300 es
+${COMMON}
+uniform mat4 u_matrix;
+layout(location = 0) in vec3 a_pos;      // 単位立方体（x, y: -0.5..0.5, z: 0..1）
+layout(location = 1) in vec3 a_normal;
+layout(location = 2) in vec3 a_inst0;    // 底面の中心 x, y, z（地面から）
+layout(location = 3) in vec3 a_inst1;    // length, depth, height
+layout(location = 4) in vec3 a_inst2;    // angle, part, group
+layout(location = 5) in vec3 a_inst3;    // offset, rows, ground
+${GROUND_VS}
+out vec3 v_world;
+out vec3 v_local;                        // 箱の中の位置 (m)。底面中心が原点
+flat out vec3 v_normal;
+flat out vec3 v_localNormal;
+flat out vec4 v_info;                    // part, group, offset, rows
+flat out vec3 v_size;
+void main() {
+  vec3 local = a_pos * a_inst1;
+  float ca = cos(a_inst2.x), sa = sin(a_inst2.x);
+  vec2 xy = vec2(local.x * ca - local.y * sa, local.x * sa + local.y * ca);
+  vec3 p = vec3(a_inst0.xy + xy, a_inst0.z + groundOf(a_inst3.z) + local.z);
+  v_world = p;
+  v_local = local;
+  v_localNormal = a_normal;
+  v_normal = vec3(a_normal.x * ca - a_normal.y * sa, a_normal.x * sa + a_normal.y * ca, a_normal.z);
+  v_info = vec4(a_inst2.y, a_inst2.z, a_inst3.x, a_inst3.y);
+  v_size = a_inst1;
+  gl_Position = u_matrix * vec4(p, 1.0);
+  v_fogDepth = fogDepth(gl_Position);
+}
+`;
+
+export const SIGNAL_FS = withFog(/* glsl */ `#version 300 es
+${COMMON}
+uniform float u_time;                    // 秒
+in vec3 v_world;
+in vec3 v_local;
+flat in vec3 v_normal;
+flat in vec3 v_localNormal;
+flat in vec4 v_info;
+flat in vec3 v_size;
+out vec4 fragColor;
+
+// 灯色の周期 (s)。直交する 2 方向が半周期ずつ交互に青になる
+const float CYCLE = 60.0;
+const float GREEN = 26.0, YELLOW = 3.0, WALK = 20.0;
+// 灯の色（線形）。日本の青信号は青緑
+const vec3 RED = vec3(1.0, 0.07, 0.03);
+const vec3 AMBER = vec3(1.0, 0.5, 0.0);
+const vec3 BLUE_GREEN = vec3(0.0, 0.9, 0.42);
+
+/** 円形の灯 1 つ。p は灯の中心からの位置 (m)。戻り値は灯の内側の割合 */
+float lamp(vec2 p, float r) {
+  float d = length(p);
+  float aa = max(fwidth(d), 1e-4);
+  return 1.0 - smoothstep(r - aa, r + aa, d);
+}
+
+/** 歩行者用の人の形（立っている人）。p は灯の中心から、s は灯の大きさ */
+float person(vec2 p, float s) {
+  float aa = max(fwidth(p.y), 1e-4);
+  float head = length(p - vec2(0.0, 0.3 * s)) - 0.1 * s;
+  vec2 b = abs(p - vec2(0.0, -0.05 * s)) - vec2(0.09 * s, 0.22 * s);
+  float body = length(max(b, 0.0)) + min(max(b.x, b.y), 0.0) - 0.03 * s;
+  return 1.0 - smoothstep(-aa, aa, min(head, body));
+}
+
+void main() {
+  int part = int(v_info.x + 0.5);
+  if (u_debug > 0) {
+    fragColor = vec4(toDisplay(toLinear(vec3(0.55)) * surfaceLight(v_normal)), 1.0);
+    return;
+  }
+  vec3 light = surfaceLight(v_normal) + vec3(1.0, 0.8, 0.6) * 0.05 * u_night;
+  // 柱・腕木: 亜鉛めっきの灰色
+  if (part == 0) {
+    fragColor = vec4(toDisplay(toLinear(vec3(0.6, 0.61, 0.6)) * light), 1.0);
+    return;
+  }
+  vec3 body = toLinear(vec3(0.5, 0.51, 0.5));
+  vec3 c = body * light;
+  if (v_localNormal.y > 0.5) {
+    // 灯面: 灯の周りは黒い板
+    float t = mod(u_time + v_info.z + v_info.y * CYCLE * 0.5, CYCLE);
+    vec2 f = vec2(v_local.x, v_local.z);
+    float L = v_size.x, H = v_size.z;
+    float glow = mix(1.6, 3.2, u_night);
+    vec3 plate = toLinear(vec3(0.08)) * light;
+    vec3 emit = vec3(0.0);
+    float cover = 0.0;
+    if (part == 1) {
+      // 横型（車両用）: 運転者から見て左から青・黄・赤。局所 -x が運転者の右
+      int rows = int(v_info.w + 0.5);
+      float rowH = rows == 2 ? H * 0.5 : H;
+      float cell = L / 3.0;
+      float r = min(cell, rowH) * 0.36;
+      // 0 = 赤, 1 = 黄, 2 = 青（灯の番号と同じ）
+      int on = t < GREEN ? 2 : t < GREEN + YELLOW ? 1 : 0;
+      float cz = H - rowH * 0.5;
+      for (int i = 0; i < 3; i++) {
+        float m = lamp(f - vec2((float(i) - 1.0) * cell, cz), r);
+        cover += m;
+        vec3 col = i == 0 ? RED : i == 1 ? AMBER : BLUE_GREEN;
+        emit += m * (i == on ? col * glow : col * 0.03);
+      }
+      if (rows == 2) {
+        // 下の段の矢印灯（消灯）
+        for (int i = 0; i < 3; i++) {
+          float m = lamp(f - vec2((float(i) - 1.0) * cell, rowH * 0.5), r * 0.8);
+          cover += m;
+          emit += m * BLUE_GREEN * 0.02;
+        }
+      }
+    } else if (part == 2) {
+      // 縦型（車両用）: 上から赤・黄・青
+      float cell = H / 3.0;
+      float r = min(cell, L) * 0.36;
+      int on = t < GREEN ? 2 : t < GREEN + YELLOW ? 1 : 0;
+      for (int i = 0; i < 3; i++) {
+        float m = lamp(f - vec2(0.0, H - (float(i) + 0.5) * cell), r);
+        cover += m;
+        vec3 col = i == 0 ? RED : i == 1 ? AMBER : BLUE_GREEN;
+        emit += m * (i == on ? col * glow : col * 0.03);
+      }
+    } else {
+      // 歩行者用: 上が赤（止まれ）、下が青（進め）。灯の中に人の形
+      float cell = H * 0.5;
+      float s = min(cell, L) * 0.8;
+      bool walk = t < WALK;
+      for (int i = 0; i < 2; i++) {
+        vec2 q = f - vec2(0.0, H - (float(i) + 0.5) * cell);
+        vec2 b = abs(q) - vec2(s * 0.5);
+        float aa = max(fwidth(q.x), 1e-4);
+        float m = 1.0 - smoothstep(-aa, aa, max(b.x, b.y));
+        float fig = person(q, s) * m;
+        cover += m;
+        vec3 col = i == 0 ? RED : BLUE_GREEN;
+        bool lit = (i == 0) != walk;
+        emit += fig * (lit ? col * glow : col * 0.03) + (m - fig) * toLinear(vec3(0.05)) * light;
+      }
+    }
+    c = mix(plate, vec3(0.0), clamp(cover, 0.0, 1.0)) + emit;
+  }
+  fragColor = vec4(toDisplay(c), 1.0);
+}
+`);
+
 /** 屋上設備。単位立方体をインスタンスごとに拡大・回転して置く */
 export const EQUIPMENT_VS = /* glsl */ `#version 300 es
 ${COMMON}

@@ -340,6 +340,7 @@ export class FacadeMeshBuilder {
       fixtures: fixtures.result(),
       fixtureIndices: fixtureIdx.result(),
       trees: new Float32Array(0),
+      signals: new Float32Array(0),
       pitchedRoofs: pitched.result(),
       pitchedRoofIndices: pitchedIdx.result(),
       grounds: grounds.result(),

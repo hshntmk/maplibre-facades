@@ -12,7 +12,7 @@ export { clearTileCache, tileCacheUsage } from './worker/TileCache';
 export { markStaleNeighbors, type NeighborTile } from './layer/staleNeighbors';
 
 // 3D Tiles
-export { loadTileset, loadTilesets, isVegetationTile, VEGETATION_PREFIX, type Tileset, type TileNode, type TileBounds } from './sources/tiles3d/Tileset';
+export { loadTileset, loadTilesets, isVegetationTile, VEGETATION_PREFIX, isFurnitureTile, FURNITURE_PREFIX, type Tileset, type TileNode, type TileBounds } from './sources/tiles3d/Tileset';
 export { ecefToGeodetic } from './sources/tiles3d/footprints';
 export * from './sources/SourceConfig';
 export { selectTilesInView, type TileView, type Selection } from './sources/tiles3d/TileSelector';

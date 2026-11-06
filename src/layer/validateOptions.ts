@@ -116,11 +116,12 @@ export function validateLayerOptions(opts: {
   solidFixtures?: unknown;
   vegetation?: unknown;
   season?: unknown;
+  trafficSignals?: unknown;
   workers?: unknown;
   debug?: unknown;
 }): void {
   if (typeof opts.id !== 'string' || !opts.id) fail('id must be a non-empty string');
-  const source = opts.source as { type?: unknown; url?: unknown; maximumScreenSpaceError?: unknown; maxCachedTiles?: unknown; dracoWasmUrl?: unknown; cache?: unknown; vegetation?: unknown } | undefined;
+  const source = opts.source as { type?: unknown; url?: unknown; maximumScreenSpaceError?: unknown; maxCachedTiles?: unknown; dracoWasmUrl?: unknown; cache?: unknown; vegetation?: unknown; cityFurniture?: unknown } | undefined;
   if (!source || (source.type !== 'geojson' && source.type !== '3dtiles')) fail(`source.type must be 'geojson' or '3dtiles'`);
   const urls = Array.isArray(source!.url) ? source!.url : [source!.url];
   if (source!.type === 'geojson' && Array.isArray(source!.url)) fail('source.url must be a single URL for geojson');
@@ -131,6 +132,8 @@ export function validateLayerOptions(opts: {
     if (source!.dracoWasmUrl !== undefined && (typeof source!.dracoWasmUrl !== 'string' || !source!.dracoWasmUrl)) fail('source.dracoWasmUrl must be a non-empty string');
     const veg = source!.vegetation;
     if (veg !== undefined && !(Array.isArray(veg) ? veg : [veg]).every((u) => typeof u === 'string' && u)) fail('source.vegetation must be a URL or an array of URLs');
+    const frn = source!.cityFurniture;
+    if (frn !== undefined && !(Array.isArray(frn) ? frn : [frn]).every((u) => typeof u === 'string' && u)) fail('source.cityFurniture must be a URL or an array of URLs');
     const cache = source!.cache as { enabled?: unknown; maxSizeMB?: unknown; maxAgeDays?: unknown } | boolean | undefined;
     if (cache !== undefined && typeof cache !== 'boolean') {
       if (typeof cache !== 'object' || cache === null) fail('source.cache must be a boolean or an object');
@@ -160,6 +163,7 @@ export function validateLayerOptions(opts: {
   if (opts.balconies !== undefined && typeof opts.balconies !== 'boolean') fail('balconies must be a boolean');
   if (opts.solidFixtures !== undefined && typeof opts.solidFixtures !== 'boolean') fail('solidFixtures must be a boolean');
   if (opts.vegetation !== undefined && typeof opts.vegetation !== 'boolean') fail('vegetation must be a boolean');
+  if (opts.trafficSignals !== undefined && typeof opts.trafficSignals !== 'boolean') fail('trafficSignals must be a boolean');
   if (opts.season !== undefined && !['spring', 'summer', 'autumn', 'winter'].includes(opts.season as string)) fail(`season must be 'spring', 'summer', 'autumn' or 'winter'`);
   if (opts.workers !== undefined && (!Number.isInteger(opts.workers) || (opts.workers as number) < 1 || (opts.workers as number) > 16)) fail(`workers must be an integer between 1 and 16 (got ${JSON.stringify(opts.workers)})`);
   if (opts.debug !== undefined && !(DEBUG_MODES as readonly unknown[]).includes(opts.debug)) fail(`unknown debug mode: ${opts.debug}`);

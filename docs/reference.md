@@ -44,6 +44,7 @@
   - 8.8 勾配屋根
   - 8.9 遠景の省略
   - 8.10 植生
+  - 8.11 信号機
 - 9\. 時刻と照明
   - 9.1 `computeLighting()`
   - 9.2 `LightingState`
@@ -144,6 +145,7 @@ new BuildingFacadeLayer(options: BuildingFacadeLayerOptions)
 | `solidFixtures` | `boolean` | `false` | 1 階の庇・テント・突き出し看板を立体で描く。[8.7](#87-1-階の構成) を参照。 |
 | `vegetation` | `boolean` | `true` | 植生（`source.vegetation`）の木を描く。[8.10](#810-植生) を参照。 |
 | `season` | `Season` | `'summer'` | 木の季節。`'spring'` `'summer'` `'autumn'` `'winter'` のいずれか。[8.10](#810-植生) を参照。 |
+| `trafficSignals` | `boolean` | `true` | 都市設備（`source.cityFurniture`）の信号機を描く。[8.11](#811-信号機) を参照。 |
 | `debug` | `DebugMode` | `'none'` | 色分け表示。[8.4](#84-debugmode) を参照。 |
 | `workerUrl` | `string \| URL` | `undefined` | Worker のスクリプトの URL。[12](#12-worker) を参照。 |
 | `workers` | `number` | CPU のコア数の半分（1–4） | 3D Tiles の処理に使う Worker の数。範囲は 1–16 の整数。GeoJSON では常に 1。[12.3](#123-worker-のプール) を参照。 |
@@ -172,6 +174,7 @@ new BuildingFacadeLayer(options: BuildingFacadeLayerOptions)
 | `solidFixtures` | `boolean` | 1 階の庇・テント・突き出し看板を立体で描くかどうか。 |
 | `vegetation` | `boolean` | 植生の木を描くかどうか。 |
 | `season` | `Season` | 木の季節。 |
+| `trafficSignals` | `boolean` | 信号機を描くかどうか。 |
 | `lightingState` | `Readonly<LightingState>` | 現在の時刻から計算した照明。[9.2](#92-lightingstate) を参照。 |
 
 ### 2.4 メソッド
@@ -213,6 +216,10 @@ layer.setTimeOfDay(18.5);
 #### `setVegetation(enabled: boolean): this`
 
 植生の木を描くかどうかを設定する。`false` でも植生のタイルの読み込みは続ける。`enabled` が真偽値でない場合、例外を送出する。
+
+#### `setTrafficSignals(enabled: boolean): this`
+
+信号機を描くかどうかを設定する。`false` でも都市設備のタイルの読み込みは続ける。`enabled` が真偽値でない場合、例外を送出する。
 
 #### `setSeason(season: Season): this`
 
@@ -331,6 +338,7 @@ interface Tiles3DSourceConfig {
   dracoWasmUrl?: string;
   cache?: boolean | TileCacheOptions;
   vegetation?: string | string[];
+  cityFurniture?: string | string[];
 }
 ```
 
@@ -342,6 +350,7 @@ interface Tiles3DSourceConfig {
 | `dracoWasmUrl` | `string` | `DEFAULT_DRACO_WASM_URL` | — | `draco_decoder.wasm` の URL。相対 URL は `document.baseURI` を基準に解決される。 |
 | `cache` | `boolean \| TileCacheOptions` | `true` | — | 展開したタイルをブラウザに保存する。[タイルの保存](#タイルの保存) を参照。 |
 | `vegetation` | `string \| string[]` | なし | — | 植生モデル（LOD1）の `tileset.json` の URL。[8.10](#810-植生) を参照。 |
+| `cityFurniture` | `string \| string[]` | なし | — | 都市設備モデル（LOD1）の `tileset.json` の URL。いまは信号機だけを描く。[8.11](#811-信号機) を参照。 |
 
 #### タイルの選択
 
@@ -1122,6 +1131,7 @@ const styles = { ...PRESET_STYLES, house: { ...PRESET_STYLES.house, pitchedRoofs
 | 1 階の立体の部材（`solidFixtures`） | 1.5 | テントの出（1 m）が 1.5 ピクセル |
 | パラペットの内側 | 1 | 高さ 0.9 m 前後が 1 ピクセル前後 |
 | 屋上設備 | 0.8 | 2.5 m の受水槽が 2 ピクセル前後 |
+| 信号機 | 2 | 灯（直径約 0.3 m）が 1 ピクセルに満たない距離 |
 
 #### 効果
 
@@ -1174,6 +1184,43 @@ LOD1 の植生は押し出した多角形なので、建物と同じく外形と
 #### 遠景
 
 タイルのいちばん近い所で 1 m が画面上で 0.3 ピクセル未満のタイルでは、木を描かない（[8.9](#89-遠景の省略)）。葉の細かい明暗は、1 ピクセルが 15 cm より大きくなる距離から平均にする。
+
+### 8.11 信号機
+
+`source.cityFurniture` に PLATEAU の都市設備モデル（LOD1 の 3D Tiles）の `tileset.json` を渡すと、交通信号機を描く。読み込みと保存は植生と同じで、都市設備のタイルも建物の壁面の判定に使わない。
+
+```ts
+new BuildingFacadeLayer({
+  id: 'facades',
+  source: { type: '3dtiles', url: chiyodaBuildingsUrl, cityFurniture: chiyodaFurnitureUrl },
+});
+```
+
+#### 灯器と柱
+
+LOD1 の交通信号機（`frn:function_code` が `4900`）は、灯器だけを囲んだ小さな箱で、柱と腕木は別の地物（柱、`4800`）になっている。灯器は外形と高さから種類を決める。
+
+| 灯器の外形 | 種類 | 灯の並び |
+|---|---|---|
+| 長辺 0.8 m 以上 | 車両用（横型） | 運転者から見て左から青・黄・赤。高さ 0.6 m を超えるものは、下の段に矢印灯（消灯）を付ける |
+| 長辺 0.8 m 未満で高さ 0.95 m 以上 | 車両用（縦型） | 上から赤・黄・青 |
+| それ以外 | 歩行者用 | 上が赤、下が青。灯の中に人の形 |
+
+灯器の奥行きはフードを除いて 0.3 m にする。柱の地物のうち、灯器が 1.2 m 以内にあるものだけを描く。腕木の付いた柱（外形の長辺が 2 m 以上）は、車両用の灯器から遠い方の端に柱を立て、灯器の上端の高さに腕木を通す。柱のない縦型と歩行者用の灯器には、背中に細い柱を足す。
+
+地面の高さは、取り付けた柱の下端か、20 m 以内の柱・照明施設（高さ 2 m 以上）の下端のうちいちばん低いものにする。どちらもなければ、車両用は灯器の下 5 m、歩行者用は 2.6 m を地面とする。
+
+#### 向きと灯色
+
+30 m 以内の灯器を 1 つの交差点とみなし、車両用の灯器の重心を中心、横型の灯器の向きを道の向きとする。
+
+- 横型の灯器は、灯の並びに直交する 2 方向のうち、交差点の外側を向ける（交差点の手前から来る車に向ける）。
+- 柱に付いた縦型・歩行者用の灯器は、柱に背を向ける。柱がなければ、道の 2 方向のどちらかにそろえる。
+- 同じ高さで灯面の向きに並んだ 2 つの灯器は、背中合わせとして互いに外を向ける。
+
+灯色は描画時の時刻（ページを開いてからの秒）で決まる。1 周期は 60 秒で、直交する 2 方向が半周期ずつ交互に青になる。車両用は青 26 秒・黄 3 秒・赤、歩行者用は青 20 秒・赤。周期の始まりは交差点ごとにずらす。信号機が見えている間は、1 秒ごとに描き直す。
+
+タイルのいちばん近い所で 1 m が画面上で 2 ピクセル未満のタイルでは、信号機を描かない（[8.9](#89-遠景の省略)）。
 
 ## 9. 時刻と照明
 
@@ -1237,6 +1284,7 @@ map.setPaintProperty('background', 'background-color',
 | `facades` | `{ front: number; side: number; party: number; sunSide: number }` | 壁面の分類ごとの延長（m）。`sunSide` は日照面の延長であり、ほかの 3 項目と重複して計上される。 |
 | `bounds` | `[number, number, number, number]` | `[west, south, east, north]`（経緯度）。 |
 | `trees` | `number \| undefined` | 描いている植生の木の本数。植生のタイルがない場合は `undefined`。 |
+| `signals` | `number \| undefined` | 描いている信号機の灯器の数。都市設備のタイルがない場合は `undefined`。 |
 
 ### 10.2 `TileTiming`
 
@@ -1395,6 +1443,7 @@ function getWorkerUrl(): string | URL | undefined
 | 影 | 建物は影を落とさない。バルコニーの中の影だけは、手すりと天井から求めて付ける。 |
 | バルコニー | 外形の内側に引っ込めて作り、外へは張り出さない。階ごと・住戸ごとの違い（バルコニーのない階、形の違い）はない。 |
 | 植生 | LOD1 の植生だけを読む。LOD2・3 の木の形は使わない。樹種は推定で、実際の木とは一致しない。PLATEAU の植生は区の一部（調べた範囲）だけで配信されている。 |
+| 信号機 | LOD1 の都市設備だけを読み、交通信号機と、それを取り付けた柱だけを描く。灯器の向き・灯色の周期・矢印灯は推定で、実際の信号とは一致しない。PLATEAU の都市設備は区の一部（調べた範囲の通り）だけで配信されている。 |
 | 1 階の構成 | 店の種類・入口の位置などは推定で、実際の建物とは一致しない。看板の文字は模様で、読める文字ではない。 |
 | スタイルの数 | 1 レイヤーあたり最大 16 個。 |
 | 3D Tiles | `EXT_structural_metadata` の外部スキーマ（`schemaUri`）は読めない。暗黙的タイリングの S2 範囲は読めない。 |

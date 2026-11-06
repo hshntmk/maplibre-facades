@@ -37,7 +37,7 @@ export const DEBUG_INDEX: Record<DebugMode, number> = { none: 0, category: 1, st
  * バルコニーは外壁が窓 1 枚分（約 3m）を 10 ピクセル以上で描く所でしか見えない（それより遠くは外壁に手すりを描く）。
  * パラペットの内側（高さ 0.9m 前後）・1 階の部材は 1 ピクセル前後、屋上設備は 2.5m の受水槽が 2 ピクセル前後より小さくなる距離から省く
  */
-export const DETAIL_MIN_PX_PER_METER = { balconies: 3, fixtures: 1.5, parapet: 1, equipment: 0.8, trees: 0.3 } as const;
+export const DETAIL_MIN_PX_PER_METER = { balconies: 3, fixtures: 1.5, parapet: 1, equipment: 0.8, trees: 0.3, signals: 2 } as const;
 
 /** 木の季節（シェーダの u_season はこの順の番号） */
 export const SEASONS = ['spring', 'summer', 'autumn', 'winter'] as const;
@@ -85,6 +85,7 @@ export function aggregateStats(list: BuildingStats[]): BuildingStats | null {
     out.facades.party += s.facades.party;
     out.facades.sunSide += s.facades.sunSide;
     if (s.trees) out.trees = (out.trees ?? 0) + s.trees;
+    if (s.signals) out.signals = (out.signals ?? 0) + s.signals;
     out.bounds = [
       Math.min(out.bounds[0], s.bounds[0]),
       Math.min(out.bounds[1], s.bounds[1]),

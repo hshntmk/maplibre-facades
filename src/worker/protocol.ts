@@ -64,6 +64,8 @@ export interface TileRequest {
   remesh?: boolean;
   /** 植生のタイル（建物ではなく木を作る。隣のタイルとの突き合わせはしない） */
   vegetation?: boolean;
+  /** 都市設備のタイル（信号機を作る。隣のタイルとの突き合わせはしない） */
+  furniture?: boolean;
 }
 
 /** タイルを捨てたので、Worker 側の建物データも捨てる */
@@ -91,6 +93,8 @@ export interface BuildingStats {
   bounds: [number, number, number, number];
   /** 植生のタイルで描いた木の本数 */
   trees?: number;
+  /** 都市設備のタイルで描いた信号機の灯器の数 */
+  signals?: number;
 }
 
 /** タイル 1 つの処理時間 (ms) */
