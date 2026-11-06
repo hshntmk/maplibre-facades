@@ -1,7 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
 
-// ライブラリ本体（dist/index.js）。ワーカーは ?worker&inline でこの中に埋め込まれる。
+// ライブラリ本体（dist/index.js）と、MapLibre に依存しない部品（dist/core.js）。ワーカーは ?worker&inline でこの中に埋め込まれる。
 // maplibre-gl は型のみ参照し、実行時には import しない。
 // draco3d の Node 用コードが参照する fs / path を空のモジュールにする（ブラウザでは使われない）
 const nodeShims = { fs: fileURLToPath(new URL('src/shims/empty.ts', import.meta.url)), path: fileURLToPath(new URL('src/shims/empty.ts', import.meta.url)) };
@@ -9,7 +9,7 @@ const nodeShims = { fs: fileURLToPath(new URL('src/shims/empty.ts', import.meta.
 export default defineConfig({
   resolve: { alias: nodeShims },
   build: {
-    lib: { entry: 'src/index.ts', formats: ['es'], fileName: () => 'index.js' },
+    lib: { entry: { index: 'src/index.ts', core: 'src/core.ts' }, formats: ['es'], fileName: (_format, name) => `${name}.js` },
     outDir: 'dist',
     emptyOutDir: true,
     sourcemap: true,

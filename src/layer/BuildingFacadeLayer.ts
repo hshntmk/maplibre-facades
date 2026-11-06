@@ -23,7 +23,6 @@ import {
   WALL_STRIDE,
   type MeshReference,
 } from '../mesh/layout';
-import { BUILDING_CATEGORIES } from '../model/BuildingRecord';
 import { createIndexView, createInstancedMesh, createMesh, treeMesh, createPointMesh, createProgram, deleteMesh, unitBox, type MeshBuffers, type Program } from '../render/gl';
 import {
   BALCONY_FS,
@@ -56,15 +55,28 @@ import { STYLE_TEXELS, balconyLayout, frontageLayout, packStyle, pitchedRoofLayo
 import { DEFAULT_STYLE_RULES, PRESET_STYLES } from '../style/presets';
 import type { StyleRule } from '../style/StyleResolver';
 import { computeFog, NO_FOG, type FogUniforms } from '../terrain/Fog';
-import { createTileGround, deleteTileGround, sampleTileGround, terrainElevation, withPlainUnpack, type TileGround } from '../terrain/Ground';
+import { createTileGround, deleteTileGround, sampleTileGround, withPlainUnpack, type TileGround } from '../terrain/Ground';
+import { terrainElevation } from '../terrain/terrainElevation';
 import { createBuildingWorker } from '../worker/createWorker';
 import { markStaleNeighbors } from './staleNeighbors';
 import { type BuildingStats, type InitRequest, type TileTiming, type WorkerRequest, type WorkerResponse } from '../worker/protocol';
 import { Evented } from './Evented';
 import { validateLayerOptions } from './validateOptions';
+import {
+  aggregateStats,
+  CATEGORY_COLORS,
+  DEBUG_INDEX,
+  DETAIL_MIN_PX_PER_METER,
+  defaultWorkerCount,
+  FACADE_COLORS,
+  fillDebugColors,
+  SEASONS,
+  STYLE_DEBUG_COLORS,
+  type DebugMode,
+  type Season,
+} from './shared';
 
-/** category: 用途 / style: ファサードスタイル / facade: 壁面の分類（界壁・側壁・正面・日当たり面）と配置された窓 */
-export type DebugMode = 'none' | 'category' | 'style' | 'facade';
+export { CATEGORY_COLORS, FACADE_COLORS, SEASONS, defaultWorkerCount, type DebugMode, type Season };
 
 export interface BuildingFacadeLayerOptions {
   /** MapLibre のレイヤー ID */
@@ -155,50 +167,11 @@ export interface TileStatus {
   cached: number;
 }
 
-export const CATEGORY_COLORS: Readonly<Record<(typeof BUILDING_CATEGORIES)[number], RGB>> = {
-  unknown: [0.6, 0.6, 0.6],
-  office: [0.26, 0.52, 0.96],
-  commercial: [0.96, 0.45, 0.2],
-  hotel: [0.82, 0.32, 0.75],
-  mixed_commercial: [0.95, 0.65, 0.25],
-  house: [0.35, 0.78, 0.38],
-  apartment: [0.2, 0.68, 0.62],
-  mixed_house: [0.75, 0.82, 0.25],
-  mixed_apartment: [0.45, 0.85, 0.75],
-  public: [0.55, 0.42, 0.9],
-  education_welfare: [0.98, 0.82, 0.3],
-  warehouse: [0.55, 0.4, 0.3],
-  factory: [0.45, 0.3, 0.25],
-  utility: [0.4, 0.45, 0.5],
-  other: [0.78, 0.78, 0.72],
-};
 
-const STYLE_DEBUG_COLORS: RGB[] = [
-  [0.55, 0.55, 0.55], [0.35, 0.35, 0.35], [0.2, 0.75, 0.95], [0.26, 0.45, 0.96], [0.2, 0.68, 0.62], [0.35, 0.78, 0.38],
-  [0.75, 0.82, 0.25], [0.96, 0.45, 0.2], [0.82, 0.32, 0.75], [0.55, 0.42, 0.9], [0.55, 0.4, 0.3], [0.9, 0.9, 0.5],
-  [0.9, 0.5, 0.5], [0.5, 0.9, 0.9], [0.9, 0.7, 0.9], [0.7, 0.9, 0.6],
-];
 
-const DEBUG_INDEX: Record<DebugMode, number> = { none: 0, category: 1, style: 2, facade: 3 };
 
-/**
- * 細部の部材を描くタイルの条件: タイルのいちばん近い所で 1m が画面上でこのピクセル数以上に見えること。
- * バルコニーは外壁が窓 1 枚分（約 3m）を 10 ピクセル以上で描く所でしか見えない（それより遠くは外壁に手すりを描く）。
- * パラペットの内側（高さ 0.9m 前後）・1 階の部材は 1 ピクセル前後、屋上設備は 2.5m の受水槽が 2 ピクセル前後より小さくなる距離から省く
- */
-const DETAIL_MIN_PX_PER_METER = { balconies: 3, fixtures: 1.5, parapet: 1, equipment: 0.8, trees: 0.3 } as const;
 
-/** 木の季節（シェーダの u_season はこの順の番号） */
-export const SEASONS = ['spring', 'summer', 'autumn', 'winter'] as const;
-export type Season = (typeof SEASONS)[number];
 
-/** facade 表示の色（シェーダ側の並び: party, side, front, sunSide） */
-export const FACADE_COLORS: Readonly<Record<'party' | 'side' | 'front' | 'sunSide', RGB>> = {
-  party: [0.86, 0.3, 0.3],
-  side: [0.35, 0.55, 0.95],
-  front: [0.3, 0.72, 0.42],
-  sunSide: [0.98, 0.7, 0.22],
-};
 
 interface Programs {
   facade: Program;
@@ -277,14 +250,7 @@ interface TileEntry {
 /** 同時に読み込むタイルの最大数（Worker 1 つあたり。最低 3） */
 const IN_FLIGHT_PER_WORKER = 2;
 const MIN_IN_FLIGHT = 3;
-/** Worker の数の既定の上限 */
-const MAX_DEFAULT_WORKERS = 4;
 
-/** 既定の Worker の数: CPU のコア数の半分（MapLibre 自身の Worker や描画の分を残す）を 1〜4 に収める */
-export function defaultWorkerCount(): number {
-  const cores = typeof navigator !== 'undefined' && navigator.hardwareConcurrency ? navigator.hardwareConcurrency : 4;
-  return Math.max(1, Math.min(MAX_DEFAULT_WORKERS, Math.floor(cores / 2)));
-}
 /** 同時に読むサブツリー（暗黙的タイリング）の数。小さなファイルなので多めにする */
 const MAX_SUBTREES_IN_FLIGHT = 4;
 const GEOJSON_TILE = 'geojson';
@@ -1226,11 +1192,7 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
   }
 
   private updateDebugColors(): Float32Array {
-    const out = this.debugColorBuffer;
-    if (this.debug === 'category') BUILDING_CATEGORIES.forEach((c, i) => out.set(CATEGORY_COLORS[c], i * 3));
-    else if (this.debug === 'facade') [FACADE_COLORS.party, FACADE_COLORS.side, FACADE_COLORS.front, FACADE_COLORS.sunSide].forEach((c, i) => out.set(c, i * 3));
-    else STYLE_DEBUG_COLORS.forEach((c, i) => out.set(c, i * 3));
-    return out;
+    return fillDebugColors(this.debug, this.debugColorBuffer);
   }
 }
 
@@ -1304,37 +1266,3 @@ function createWallSegmentTexture(gl: WebGL2RenderingContext, data: Float32Array
   return texture;
 }
 
-/** タイルごとの統計を合計する */
-function aggregateStats(list: BuildingStats[]): BuildingStats | null {
-  if (!list.length) return null;
-  const out: BuildingStats = {
-    total: 0,
-    skipped: 0,
-    byCategory: {},
-    byStyle: {},
-    estimated: { height: 0, storeys: 0, category: 0 },
-    facades: { front: 0, side: 0, party: 0, sunSide: 0 },
-    bounds: [Infinity, Infinity, -Infinity, -Infinity],
-  };
-  for (const s of list) {
-    out.total += s.total;
-    out.skipped += s.skipped;
-    for (const [k, v] of Object.entries(s.byCategory)) out.byCategory[k] = (out.byCategory[k] ?? 0) + v;
-    for (const [k, v] of Object.entries(s.byStyle)) out.byStyle[k] = (out.byStyle[k] ?? 0) + v;
-    out.estimated.height += s.estimated.height;
-    out.estimated.storeys += s.estimated.storeys;
-    out.estimated.category += s.estimated.category;
-    out.facades.front += s.facades.front;
-    out.facades.side += s.facades.side;
-    out.facades.party += s.facades.party;
-    out.facades.sunSide += s.facades.sunSide;
-    if (s.trees) out.trees = (out.trees ?? 0) + s.trees;
-    out.bounds = [
-      Math.min(out.bounds[0], s.bounds[0]),
-      Math.min(out.bounds[1], s.bounds[1]),
-      Math.max(out.bounds[2], s.bounds[2]),
-      Math.max(out.bounds[3], s.bounds[3]),
-    ];
-  }
-  return out;
-}

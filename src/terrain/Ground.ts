@@ -1,4 +1,3 @@
-import type { Map as MapLibreMap } from 'maplibre-gl';
 import { GROUND_STRIDE, GROUND_TEXTURE_WIDTH, type MeshReference } from '../mesh/layout';
 
 // 建物を MapLibre の地形に載せる。標高は建物ごとに 1 つで、タイルごとの R32F テクスチャ（番号 → 標高 m）に入れ、
@@ -109,17 +108,6 @@ export function sampleTileGround(
   gl.bindTexture(gl.TEXTURE_2D, ground.texture);
   withPlainUnpack(gl, () => gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, GROUND_TEXTURE_WIDTH, rows, gl.RED, gl.FLOAT, values));
   return true;
-}
-
-/** 地形の標高を引く関数。地形がない・使わないときは undefined */
-export function terrainElevation(map: MapLibreMap): ((lng: number, lat: number) => number | null) | undefined {
-  if (!map.getTerrain()) return undefined;
-  const point: [number, number] = [0, 0];
-  return (lng, lat) => {
-    point[0] = lng;
-    point[1] = lat;
-    return map.queryTerrainElevation(point);
-  };
 }
 
 export function deleteTileGround(gl: WebGL2RenderingContext, ground: TileGround): void {

@@ -86,11 +86,33 @@ function distanceTo(node: TileNode, cam: [number, number, number]): number {
   return Math.sqrt(d2) / meter;
 }
 
+/**
+ * 描画系によらないタイルの見え方。MapLibre はメルカトルの行列から、Cesium は視錐台と ECEF の範囲から作る
+ */
+export interface TileView {
+  /** タイルが視錐台に入るか */
+  isVisible(node: TileNode): boolean;
+  /** カメラからタイルの範囲までの距離 (m) */
+  distance(node: TileNode): number;
+  /** 画面上の誤差の係数: 描画領域の高さ (px) / (2 tan(縦の視野角 / 2)) */
+  sseFactor: number;
+}
+
+/** MapLibre のカメラ（メルカトル）でタイルを選ぶ */
 export function selectTiles(root: TileNode, cam: CameraState, maxSSE: number, isReady: (node: TileNode) => boolean): Selection {
+  const view: TileView = {
+    isVisible: (node) => isVisible(node, cam.matrix),
+    distance: (node) => distanceTo(node, cam.position),
+    sseFactor: cam.viewportHeight / (2 * Math.tan(cam.fov / 2)),
+  };
+  return selectTilesInView(root, view, maxSSE, isReady);
+}
+
+export function selectTilesInView(root: TileNode, view: TileView, maxSSE: number, isReady: (node: TileNode) => boolean): Selection {
   const load = new Map<TileNode, number>();
   const expand = new Map<TileNode, number>();
   const used = new Set<TileNode>();
-  const sseFactor = cam.viewportHeight / (2 * Math.tan(cam.fov / 2));
+  const sseFactor = view.sseFactor;
 
   const want = (node: TileNode, distance: number) => {
     if (node.contentUrl && !isReady(node)) load.set(node, distance);
@@ -98,8 +120,8 @@ export function selectTiles(root: TileNode, cam: CameraState, maxSSE: number, is
 
   /** node 以下で描くタイルを返す。ready は「穴なく描けるか」 */
   const visit = (node: TileNode): { render: TileNode[]; ready: boolean } => {
-    if (!isVisible(node, cam.matrix)) return { render: [], ready: true };
-    const distance = distanceTo(node, cam.position);
+    if (!view.isVisible(node)) return { render: [], ready: true };
+    const distance = view.distance(node);
     const sse = distance > 0 ? (node.geometricError * sseFactor) / distance : Infinity;
     // 暗黙的タイリングの、まだ読んでいないサブツリー。読み終わるまでは親で代用する
     if (node.pending) {
