@@ -4,7 +4,7 @@
 
 PLATEAU の LOD1 の建物は押し出した箱なので、そのまま地図に載せると同じような箱が並びます。このライブラリは、建物の用途・階数と形、隣の建物との距離から、窓や屋根などの外観を決めて描きます。見た目は建物の種類ごとのスタイルで変えられます。
 
-デモ: https://hshntmk.github.io/maplibre-facades/ （東京 23 区の PLATEAU の 3D Tiles を直接読みます）
+デモ: https://hshntmk.github.io/maplibre-facades/ （東京 23 区と札幌・仙台・新潟・大阪・広島・福岡の PLATEAU の 3D Tiles を直接読みます）
 
 試作（0.x）の段階で、API は変わることがあります。動作は maplibre-gl 6.12 で確かめています。
 
@@ -175,5 +175,5 @@ npm run demo:build     # デモを examples/chiyoda/dist に出力
 
 ## 出典
 
-- 建物データ: 国土交通省 Project PLATEAU（3D 都市モデル 建築物モデル 東京23区 2025）、[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/deed.ja)
+- 建物データ: 国土交通省 Project PLATEAU（3D 都市モデル 建築物モデル 東京23区 2025、札幌市 2020、仙台市 2024、新潟市 2023、大阪市 2025、広島市 2024、福岡市 2024）、[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/deed.ja)
 - 背景地図: [地理院タイル](https://maps.gsi.go.jp/development/ichiran.html)（全国最新写真）

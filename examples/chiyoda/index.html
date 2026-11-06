@@ -3,13 +3,13 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>PLATEAU Facades – 東京23区</title>
+    <title>PLATEAU Facades – 東京23区と 6 都市</title>
     <link rel="stylesheet" href="./demo.css" />
   </head>
   <body>
     <div id="map"></div>
     <aside id="panel">
-      <h1>PLATEAU Facades <span>東京23区 試作</span></h1>
+      <h1>PLATEAU Facades <span>東京23区と 6 都市 試作</span></h1>
 
       <section>
         <label class="row">
@@ -24,7 +24,7 @@
         <h2>データ</h2>
         <div class="row">
           <select id="source">
-            <option value="3dtiles">3D Tiles: 東京23区（PLATEAU から直接・表示範囲だけ）</option>
+            <option value="3dtiles">3D Tiles: 東京23区と 6 都市（PLATEAU から直接・表示範囲だけ）</option>
             <option value="geojson">GeoJSON: 千代田区のみ（事前変換・一括）</option>
           </select>
         </div>
@@ -93,12 +93,22 @@
           <button data-view="shibuya">渋谷</button>
           <button data-view="overview">全体</button>
         </div>
+        <div class="row views">
+          <button data-view="sapporo">札幌</button>
+          <button data-view="sendai">仙台</button>
+          <button data-view="niigata">新潟</button>
+        </div>
+        <div class="row views">
+          <button data-view="osaka">大阪</button>
+          <button data-view="hiroshima">広島</button>
+          <button data-view="fukuoka">福岡</button>
+        </div>
       </section>
 
       <section id="stats"><p class="muted">PLATEAU データを読み込み中…</p></section>
 
       <footer>
-        出典: 国土交通省 Project PLATEAU（建築物モデル 東京23区 2025）/ 背景: 地理院タイル（全国最新写真）
+        出典: 国土交通省 Project PLATEAU（建築物モデル 東京23区 2025、札幌市 2020、仙台市 2024、新潟市 2023、大阪市 2025、広島市 2024、福岡市 2024）/ 背景: 地理院タイル（全国最新写真）
       </footer>
     </aside>
     <script type="module" src="./main.ts"></script>

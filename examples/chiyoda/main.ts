@@ -2,6 +2,7 @@ import * as maplibregl from 'maplibre-gl';
 // maplibre-gl v6 は自身の Worker を import.meta.url 基準で探すが、本番ビルドではそのファイルが出力されないので、Vite に Worker として取り込ませて URL を渡す
 import mapLibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import { TOKYO_23_WARDS } from './tokyo23';
+import { FUKUOKA_WARDS, HIROSHIMA_WARDS, NIIGATA_WARDS, OSAKA_WARDS, SAPPORO_WARDS, SENDAI_WARDS } from './cities';
 import { CloudLayer } from './clouds';
 import { GSI_DEM_PROTOCOL, registerGsiDemProtocol } from './gsiTerrain';
 import { BUILDING_CATEGORIES, BuildingFacadeLayer, CATEGORY_COLORS, clearTileCache, tileCacheUsage, type BuildingStats, type DebugMode, type RGB } from 'maplibre-facades';
@@ -34,7 +35,17 @@ const VIEWS: Record<string, maplibregl.CameraOptions> = {
   shinjuku: { center: [139.6935, 35.6905], zoom: 16.3, pitch: 66, bearing: 30 },
   shibuya: { center: [139.7016, 35.6590], zoom: 16.8, pitch: 64, bearing: -20 },
   overview: { center: [139.7565, 35.6875], zoom: 14.6, pitch: 55, bearing: -15 },
+  // 東京23区以外の都市の中心部
+  sapporo: { center: [141.3510, 43.0605], zoom: 16.6, pitch: 66, bearing: 70 },     // 大通公園の西から東へ
+  sendai: { center: [140.8790, 38.2615], zoom: 16.6, pitch: 66, bearing: -70 },     // 仙台駅から一番町方面
+  niigata: { center: [139.0560, 37.9135], zoom: 16.6, pitch: 66, bearing: -30 },    // 新潟駅から万代方面
+  osaka: { center: [135.4980, 34.7020], zoom: 16.4, pitch: 66, bearing: 20 },       // 梅田
+  hiroshima: { center: [132.4575, 34.3940], zoom: 16.6, pitch: 66, bearing: 60 },   // 紙屋町から八丁堀方面
+  fukuoka: { center: [130.3990, 33.5895], zoom: 16.6, pitch: 66, bearing: 30 },     // 天神
 };
+
+/** 東京23区以外の都市（3D Tiles のときだけ選べる） */
+const OTHER_CITY_VIEWS = new Set(['sapporo', 'sendai', 'niigata', 'osaka', 'hiroshima', 'fukuoka']);
 
 const TOKYO_OVERVIEW: maplibregl.CameraOptions = { center: [139.735, 35.682], zoom: 12.8, pitch: 50, bearing: -10 };
 
@@ -101,7 +112,10 @@ const layer = new BuildingFacadeLayer({
   source:
     sourceKind === 'geojson'
       ? { type: 'geojson', url: `${import.meta.env.BASE_URL}data/13101_bldg_lod1.geojson` }
-      : { type: '3dtiles', url: TOKYO_23_WARDS.map((w) => w.url) },
+      : {
+          type: '3dtiles',
+          url: [...TOKYO_23_WARDS, ...SAPPORO_WARDS, ...SENDAI_WARDS, ...NIIGATA_WARDS, ...OSAKA_WARDS, ...HIROSHIMA_WARDS, ...FUKUOKA_WARDS].map((w) => w.url),
+        },
   adapter: { name: 'plateau' },
   // 確認用: ?workers=N で Worker の数を変えられる（既定は CPU のコア数の半分、1〜4）
   workers: Number(new URLSearchParams(location.search).get('workers')) || undefined,
@@ -291,13 +305,15 @@ $<HTMLSelectElement>('debug').addEventListener('change', (e) => {
   layer.setDebugMode((e.target as HTMLSelectElement).value as DebugMode);
   if (layer.stats) renderStats(layer.stats);
 });
-document.querySelectorAll<HTMLButtonElement>('[data-view]').forEach((b) =>
+document.querySelectorAll<HTMLButtonElement>('[data-view]').forEach((b) => {
+  // 東京23区以外の都市は 3D Tiles のときだけ（GeoJSON は千代田区だけ）
+  if (sourceKind === 'geojson' && OTHER_CITY_VIEWS.has(b.dataset.view!)) b.hidden = true;
   b.addEventListener('click', () => {
     // 「全体」は 3D Tiles なら 23 区、GeoJSON なら千代田区
     const view = b.dataset.view === 'overview' && sourceKind === '3dtiles' ? TOKYO_OVERVIEW : VIEWS[b.dataset.view!];
     map.flyTo({ ...view, duration: 2500, essential: true });
-  }),
-);
+  });
+});
 
 // ---------------------------------------------------------------- 統計・凡例
 
