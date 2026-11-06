@@ -78,6 +78,7 @@ layer.setWeathering(false);
 | `surfaceDetail` | ON | 外壁の素材（タイル・コンクリート・石・金属）の凹凸とつや、ガラスの歪み |
 | `balconies` | `true` | 共同住宅のバルコニーを立体で描く |
 | `solidFixtures` | `false` | 1 階の庇・テント・突き出し看板を立体で描く |
+| `vegetation` / `season` | `true` / `'summer'` | 植生の木を描く / 木の季節（春は桜、秋は紅葉、冬は落葉） |
 | `terrain` / `fog` | `true` / `true` | MapLibre の地形に建物を載せる / sky の霞を建物にもかける |
 | `workers` | CPU のコア数の半分（1〜4） | 3D Tiles の処理に使う Worker の数 |
 
@@ -89,6 +90,7 @@ layer.setWeathering(false);
 | `maxCachedTiles` | `48` | 表示していないタイルを保持しておく数 |
 | `cache` | `{ maxSizeMB: 200, maxAgeDays: 2 }` | 展開したタイルをブラウザ（IndexedDB）に保存し、次からはダウンロードを省く。`false` で保存しない |
 | `dracoWasmUrl` | jsDelivr の `draco3d@1.5.7/draco_decoder.wasm` | Draco の展開に使う wasm。外部の CDN を使えない環境では自分で置いて指定する |
+| `vegetation` | なし | PLATEAU の植生モデル（LOD1）の tileset.json。単独木と植被を木として描く |
 
 建物の種類ごとの見た目（窓の間隔、外壁の色の候補、1 階の構成、勾配屋根の割合など）は、スタイルを上書きして変えます。
 

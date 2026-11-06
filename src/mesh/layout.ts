@@ -101,6 +101,16 @@ export const EQUIPMENT_ATTRIBUTES = [
   { location: 6, size: 1, offset: 12 },
 ];
 
+/** 木のインスタンス（floats）。幹と樹冠の形（render/gl.ts の treeMesh）をインスタンスごとに大きさを変えて描く */
+export const TREE_STRIDE = 9;
+// 0-2 根元の位置（z は地面からの高さ。地形の標高は ground で足す） | 3 height（木の高さ） | 4 crown（樹冠の半径） | 5 crownBase（樹冠の下端の高さ）
+// 6 type（TREE_TYPES） | 7 seed（0–1） | 8 ground
+export const TREE_ATTRIBUTES = [
+  { location: 2, size: 3, offset: 0 },
+  { location: 3, size: 3, offset: 3 },
+  { location: 4, size: 3, offset: 6 },
+];
+
 /** 航空障害灯（floats）。点として描画する */
 export const LIGHT_STRIDE = 6;
 // 0-2 pos（z は建物の上端） | 3 height（建物の高さ） | 4 phase（点滅の位相） | 5 ground
@@ -151,6 +161,8 @@ export interface FacadeMesh {
   /** 1 階の立体の部材（庇・テント・突き出し看板） */
   fixtures: Float32Array;
   fixtureIndices: Uint32Array;
+  /** 植生の木（TREE_STRIDE ごとのインスタンス）。植生のタイルだけが持つ */
+  trees: Float32Array;
   /** 戸建ての勾配屋根（切妻・寄棟・片流れ） */
   pitchedRoofs: Float32Array;
   pitchedRoofIndices: Uint32Array;

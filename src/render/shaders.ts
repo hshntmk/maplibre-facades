@@ -1655,6 +1655,145 @@ void main() {
 }
 `);
 
+/**
+ * 植生の木。幹（六角柱）と樹冠（分割した正二十面体）をインスタンスごとに大きさと形を変えて描く。
+ * 樹冠は種類ごとに楕円体（広葉樹・桜）か円錐（針葉樹）にし、ノイズでふくらみを付けて木ごとに形を変える。
+ * 色は種類と季節で決め、葉の塊の明暗はフラグメントシェーダのノイズで付ける
+ */
+const TREE_COMMON = /* glsl */ `
+uniform float u_season;   // 0 = 春, 1 = 夏, 2 = 秋, 3 = 冬
+float hash31(vec3 p) { return hash13(p); }
+float noise3(vec3 p) {
+  vec3 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  float n000 = hash31(i), n100 = hash31(i + vec3(1, 0, 0)), n010 = hash31(i + vec3(0, 1, 0)), n110 = hash31(i + vec3(1, 1, 0));
+  float n001 = hash31(i + vec3(0, 0, 1)), n101 = hash31(i + vec3(1, 0, 1)), n011 = hash31(i + vec3(0, 1, 1)), n111 = hash31(i + vec3(1, 1, 1));
+  return mix(mix(mix(n000, n100, f.x), mix(n010, n110, f.x), f.y), mix(mix(n001, n101, f.x), mix(n011, n111, f.x), f.y), f.z);
+}
+/** 冬に葉を落とす種類か（落葉広葉樹・桜） */
+bool bareInWinter(int type) { return type == 0 || type == 3; }
+`;
+
+export const TREE_VS = /* glsl */ `#version 300 es
+${COMMON}
+${TREE_COMMON}
+uniform mat4 u_matrix;
+layout(location = 0) in vec3 a_pos;      // 幹: 半径 1・高さ 0–1 の六角柱、樹冠: 半径 1 の球
+layout(location = 1) in vec3 a_normal;
+layout(location = 5) in float a_part;    // 0 = 幹, 1 = 樹冠
+layout(location = 2) in vec3 a_inst0;    // 根元 x, y, z
+layout(location = 3) in vec3 a_inst1;    // height, crown（樹冠の半径）, crownBase（樹冠の下端）
+layout(location = 4) in vec3 a_inst2;    // type, seed, ground
+${GROUND_VS}
+out vec3 v_world;
+out vec3 v_local;                        // 樹冠の中の位置（-1–1）。葉の塊の模様に使う
+flat out vec3 v_attr;                    // part, type, seed
+out vec3 v_normal;
+void main() {
+  float h = a_inst1.x, crown = a_inst1.y, base = a_inst1.z;
+  int type = int(a_inst2.x + 0.5);
+  float seed = a_inst2.y;
+  vec3 p;
+  vec3 n = a_normal;
+  if (a_part < 0.5) {
+    // 幹: 樹冠の中ほどまで。低木には幹がない（面積 0 にする）
+    float r = type == 4 ? 0.0 : clamp(crown * 0.07 + h * 0.008, 0.08, 0.5);
+    // 冬の落葉樹は葉がないので、幹を樹冠の上の方まで見せる
+    float reach = u_season > 2.5 && bareInWinter(type) ? 0.8 : 0.35;
+    p = vec3(a_pos.xy * r * (1.0 - a_pos.z * 0.4), a_pos.z * (base + (h - base) * reach));
+  } else {
+    vec3 q = a_pos;
+    // 冬の落葉樹は枝だけになるので、樹冠を少し小さく
+    float winter = u_season > 2.5 && bareInWinter(type) ? 0.85 : 1.0;
+    float rz = (h - base) * 0.5;
+    if (type == 2) {
+      // 針葉樹: 下が広く上がとがった円錐に近い形
+      float t = q.z * 0.5 + 0.5;
+      q.xy *= mix(1.15, 0.08, t);
+    }
+    // 木ごとのふくらみ（樹冠の形を変える）
+    float bump = noise3(q * 1.6 + seed * 37.0) - 0.5;
+    q *= 1.0 + bump * (type == 4 ? 0.25 : 0.35);
+    p = vec3(q.xy * crown * winter, base + rz + q.z * rz * winter);
+    v_local = a_pos;
+  }
+  if (a_part < 0.5) v_local = vec3(0.0);
+  vec3 world = a_inst0 + p + vec3(0.0, 0.0, groundOf(a_inst2.z));
+  v_world = world;
+  v_attr = vec3(a_part, a_inst2.x, seed);
+  v_normal = n;
+  gl_Position = u_matrix * vec4(world, 1.0);
+  v_fogDepth = fogDepth(gl_Position);
+}
+`;
+
+export const TREE_FS = withFog(/* glsl */ `#version 300 es
+${COMMON}
+${TREE_COMMON}
+in vec3 v_world;
+in vec3 v_local;
+flat in vec3 v_attr;
+in vec3 v_normal;
+out vec4 fragColor;
+void main() {
+  int part = int(v_attr.x + 0.5), type = int(v_attr.y + 0.5);
+  float seed = v_attr.z;
+  int season = int(u_season + 0.5);
+  vec3 n = normalize(v_normal);
+  if (u_debug > 0) {
+    fragColor = vec4(toDisplay(toLinear(vec3(0.3, 0.55, 0.3)) * (0.5 + 0.5 * max(n.z, 0.0))), 1.0);
+    return;
+  }
+  vec3 albedo;
+  if (part == 0) {
+    albedo = vec3(0.3, 0.24, 0.19);
+  } else {
+    // 葉の塊: 大きな塊と細かい葉の明暗
+    float clump = noise3(v_local * 3.2 + seed * 91.0);
+    float fine = noise3(v_local * 11.0 + seed * 17.0);
+    float px = length(fwidth(v_world));
+    float detail = 1.0 - smoothstep(0.15, 0.6, px);
+    float shade = mix(0.85, 0.65 + 0.45 * clump, 0.9) * mix(1.0, 0.85 + 0.3 * fine, detail);
+    float tone = hash12(vec2(seed * 53.0, 1.7));
+    vec3 summer = type == 2 ? mix(vec3(0.12, 0.24, 0.13), vec3(0.16, 0.3, 0.16), tone)
+                : type == 1 ? mix(vec3(0.13, 0.27, 0.12), vec3(0.18, 0.33, 0.14), tone)
+                : type == 4 ? mix(vec3(0.18, 0.34, 0.14), vec3(0.24, 0.4, 0.17), tone)
+                : mix(vec3(0.22, 0.4, 0.15), vec3(0.3, 0.46, 0.18), tone);
+    albedo = summer;
+    if (season == 0) {
+      // 春: 桜は花の色、落葉樹は明るい新緑
+      if (type == 3) albedo = mix(vec3(1.0, 0.7, 0.8), vec3(1.0, 0.84, 0.88), fine);
+      else if (type == 0) albedo = mix(summer, vec3(0.45, 0.62, 0.22), 0.5);
+    } else if (season == 2) {
+      // 秋: 落葉樹は黄（イチョウ）か赤・橙（カエデ・ケヤキ）、桜は橙
+      if (type == 0) albedo = tone < 0.5 ? mix(vec3(0.85, 0.66, 0.12), vec3(0.95, 0.78, 0.2), clump) : mix(vec3(0.7, 0.22, 0.08), vec3(0.85, 0.42, 0.12), clump);
+      else if (type == 3) albedo = mix(vec3(0.75, 0.38, 0.14), vec3(0.85, 0.5, 0.2), clump);
+    } else if (season == 3) {
+      // 冬: 落葉樹は枝だけ（すき間から向こうが見える）
+      if (bareInWinter(type)) {
+        // 細かい枝の網目だけを残す（近くでは向こうが透けて見え、遠くでは薄い茶色の塊になる）
+        float twig = noise3(v_local * 26.0 + seed * 7.0);
+        if (mix(0.5, twig * 0.7 + fine * 0.3, detail) < 0.56) discard;
+        albedo = vec3(0.36, 0.31, 0.27);
+      } else {
+        albedo *= 0.85;
+      }
+    }
+    albedo *= shade;
+    // 樹冠の下側と内側は暗い
+    albedo *= mix(0.55, 1.0, smoothstep(-1.0, 0.6, v_local.z));
+  }
+  // 葉は光を透かすので、日の当たらない側も少し明るい
+  float sun = max(dot(n, u_sunDir), 0.0) * 0.8 + max(-dot(n, u_sunDir), 0.0) * (part == 1 ? 0.15 : 0.0);
+  sun *= smoothstep(-0.02, 0.08, u_sunDir.z);
+  vec3 ambient = mix(toLinear(u_skyHorizon), toLinear(u_skyZenith), 0.5 + 0.3 * n.z) * 0.9 + vec3(0.012, 0.011, 0.01);
+  // 夜は街灯の照り返しが下から少し当たる
+  vec3 street = vec3(1.0, 0.75, 0.5) * 0.04 * u_night * exp(-max(v_world.z, 0.0) / 6.0);
+  vec3 c = toLinear(albedo) * (ambient + toLinear(u_sunColor) * sun * 1.1 + street);
+  fragColor = vec4(toDisplay(c), 1.0);
+}
+`);
+
 /** 屋上設備。単位立方体をインスタンスごとに拡大・回転して置く */
 export const EQUIPMENT_VS = /* glsl */ `#version 300 es
 ${COMMON}

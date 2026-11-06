@@ -46,6 +46,15 @@
         <label class="check"><input id="interior" type="checkbox" checked /> 室内（インテリアマッピング）</label>
         <label class="check"><input id="balconies" type="checkbox" checked /> バルコニーを立体で描く</label>
         <label class="check"><input id="solid-fixtures" type="checkbox" /> 1 階の庇・テント・看板を立体で描く</label>
+        <label class="check"><input id="vegetation" type="checkbox" checked /> 植生（PLATEAU の木。東京の一部の区と仙台）</label>
+        <div class="row">
+          <select id="season">
+            <option value="spring">木の季節: 春（桜）</option>
+            <option value="summer" selected>木の季節: 夏</option>
+            <option value="autumn">木の季節: 秋（紅葉）</option>
+            <option value="winter">木の季節: 冬（落葉）</option>
+          </select>
+        </div>
         <label class="check"><input id="weathering" type="checkbox" checked /> 壁のくすみ（雨だれ・汚れ・しみ）</label>
         <label class="row"><span>くすみの強さ</span><output id="weathering-label">1.0</output></label>
         <input id="weathering-strength" type="range" min="0" max="2" step="0.1" value="1" />

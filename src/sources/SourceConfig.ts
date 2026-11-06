@@ -31,6 +31,11 @@ export interface Tiles3DSourceConfig {
    * true / false か、上限を指定するオブジェクト
    */
   cache?: boolean | TileCacheOptions;
+  /**
+   * 植生モデル（LOD1）の tileset.json の URL。単独木（SolitaryVegetationObject）と植被（PlantCover）に対応。
+   * 建物と同じく表示範囲のタイルだけを読み、木として描く
+   */
+  vegetation?: string | string[];
 }
 
 export interface TileCacheOptions {

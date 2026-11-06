@@ -62,6 +62,8 @@ export interface TileRequest {
   url: string;
   transform?: number[];
   remesh?: boolean;
+  /** 植生のタイル（建物ではなく木を作る。隣のタイルとの突き合わせはしない） */
+  vegetation?: boolean;
 }
 
 /** タイルを捨てたので、Worker 側の建物データも捨てる */
@@ -87,6 +89,8 @@ export interface BuildingStats {
   /** 壁面の分類ごとの延長 (m)。正面・側壁（狭い隙間に面する）・界壁（隣と接する）。各建物のスタイルのしきい値で地上部を分類 */
   facades: FacadeLengths;
   bounds: [number, number, number, number];
+  /** 植生のタイルで描いた木の本数 */
+  trees?: number;
 }
 
 /** タイル 1 つの処理時間 (ms) */

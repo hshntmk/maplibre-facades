@@ -7,6 +7,8 @@ import {
   BALCONY_ATTRIBUTES,
   BALCONY_STRIDE,
   EQUIPMENT_ATTRIBUTES,
+  TREE_ATTRIBUTES,
+  TREE_STRIDE,
   FIXTURE_ATTRIBUTES,
   FIXTURE_STRIDE,
   PITCHED_ROOF_ATTRIBUTES,
@@ -22,11 +24,13 @@ import {
   type MeshReference,
 } from '../mesh/layout';
 import { BUILDING_CATEGORIES } from '../model/BuildingRecord';
-import { createIndexView, createInstancedMesh, createMesh, createPointMesh, createProgram, deleteMesh, unitBox, type MeshBuffers, type Program } from '../render/gl';
+import { createIndexView, createInstancedMesh, createMesh, treeMesh, createPointMesh, createProgram, deleteMesh, unitBox, type MeshBuffers, type Program } from '../render/gl';
 import {
   BALCONY_FS,
   BALCONY_VS,
   EQUIPMENT_FS,
+  TREE_FS,
+  TREE_VS,
   FIXTURE_FS,
   FIXTURE_VS,
   PITCHED_ROOF_FS,
@@ -47,7 +51,7 @@ import { resolveSurfaceDetailOptions, type ResolvedSurfaceDetailOptions, type Su
 import { MATERIAL_TEXTURE_SIZE, MAX_WALL_MATERIALS, WALL_MATERIALS, type MaterialTexture } from '../material/WallMaterials';
 import { DEFAULT_MAX_CACHED_TILES, DEFAULT_MAX_SSE, resolveTileCacheOptions, type SourceConfig } from '../sources/SourceConfig';
 import { selectTiles } from '../sources/tiles3d/TileSelector';
-import { loadTilesets, type TileNode, type Tileset } from '../sources/tiles3d/Tileset';
+import { isVegetationTile, loadTilesets, type TileNode, type Tileset } from '../sources/tiles3d/Tileset';
 import { STYLE_TEXELS, balconyLayout, frontageLayout, packStyle, pitchedRoofLayout, type FacadeStyle, type RGB } from '../style/FacadeStyle';
 import { DEFAULT_STYLE_RULES, PRESET_STYLES } from '../style/presets';
 import type { StyleRule } from '../style/StyleResolver';
@@ -117,6 +121,10 @@ export interface BuildingFacadeLayerOptions {
    * 形は常に作ってあるので、切り替えてもデータの再読み込みは起きない
    */
   solidFixtures?: boolean;
+  /** 植生（`source.vegetation`）の木を描く（既定 true） */
+  vegetation?: boolean;
+  /** 木の季節（既定 'summer'）。落葉樹の葉の色と、冬の落葉、春の桜が変わる */
+  season?: Season;
   debug?: DebugMode;
   /** ワーカーの URL。省略時はバンドル内に埋め込んだワーカーを使う（setWorkerUrl() で全体の既定も変えられる） */
   workerUrl?: string | URL;
@@ -178,7 +186,11 @@ const DEBUG_INDEX: Record<DebugMode, number> = { none: 0, category: 1, style: 2,
  * バルコニーは外壁が窓 1 枚分（約 3m）を 10 ピクセル以上で描く所でしか見えない（それより遠くは外壁に手すりを描く）。
  * パラペットの内側（高さ 0.9m 前後）・1 階の部材は 1 ピクセル前後、屋上設備は 2.5m の受水槽が 2 ピクセル前後より小さくなる距離から省く
  */
-const DETAIL_MIN_PX_PER_METER = { balconies: 3, fixtures: 1.5, parapet: 1, equipment: 0.8 } as const;
+const DETAIL_MIN_PX_PER_METER = { balconies: 3, fixtures: 1.5, parapet: 1, equipment: 0.8, trees: 0.3 } as const;
+
+/** 木の季節（シェーダの u_season はこの順の番号） */
+export const SEASONS = ['spring', 'summer', 'autumn', 'winter'] as const;
+export type Season = (typeof SEASONS)[number];
 
 /** facade 表示の色（シェーダ側の並び: party, side, front, sunSide） */
 export const FACADE_COLORS: Readonly<Record<'party' | 'side' | 'front' | 'sunSide', RGB>> = {
@@ -193,6 +205,7 @@ interface Programs {
   balconies: Program;
   fixtures: Program;
   pitchedRoofs: Program;
+  trees: Program;
   parapet: Program;
   roof: Program;
   equipment: Program;
@@ -226,6 +239,7 @@ interface TileGpu {
   balconies: MeshBuffers;
   fixtures: MeshBuffers;
   pitchedRoofs: MeshBuffers;
+  trees: MeshBuffers & { instanceCount: number };
   /** 建物ごとの地形の標高 */
   ground: TileGround;
   /** 描画のたびに計算する、局所座標 → クリップの行列とカメラ位置 */
@@ -309,6 +323,8 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
   private _fog: boolean;
   private _balconies: boolean;
   private _solidFixtures: boolean;
+  private _vegetation: boolean;
+  private _season: Season;
   /** 地形の版。地形が変わるたびに増やし、タイルの標高が古ければ引き直す */
   private terrainVersion = 0;
   private terrainTimer?: ReturnType<typeof setTimeout>;
@@ -363,6 +379,8 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
     this._fog = options.fog ?? true;
     this._balconies = options.balconies ?? true;
     this._solidFixtures = options.solidFixtures ?? false;
+    this._vegetation = options.vegetation ?? true;
+    this._season = options.season ?? 'summer';
   }
 
   // ---------------------------------------------------------------- state
@@ -435,6 +453,16 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
   /** 1 階の庇・テント・突き出し看板を立体で描くか */
   get solidFixtures(): boolean {
     return this._solidFixtures;
+  }
+
+  /** 植生の木を描くか */
+  get vegetation(): boolean {
+    return this._vegetation;
+  }
+
+  /** 木の季節 */
+  get season(): Season {
+    return this._season;
   }
 
   get lightingState(): Readonly<LightingState> {
@@ -529,6 +557,22 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
     return this;
   }
 
+  /** 植生の木を描くか（描かなくても読み込みは続ける） */
+  setVegetation(enabled: boolean): this {
+    if (typeof enabled !== 'boolean') throw new BuildingFacadeLayerError('options', `vegetation must be a boolean (got ${enabled})`);
+    this._vegetation = enabled;
+    this.map?.triggerRepaint();
+    return this;
+  }
+
+  /** 木の季節。データの再読み込みは起きない */
+  setSeason(season: Season): this {
+    if (!SEASONS.includes(season)) throw new BuildingFacadeLayerError('options', `season must be one of ${SEASONS.join(', ')} (got ${season})`);
+    this._season = season;
+    this.map?.triggerRepaint();
+    return this;
+  }
+
   setReflection(strength: number): this {
     if (!Number.isFinite(strength) || strength < 0 || strength > 3) {
       throw new BuildingFacadeLayerError('options', `reflection must be a number between 0 and 3 (got ${strength})`);
@@ -564,6 +608,7 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
         balconies: createProgram(gl, BALCONY_VS, BALCONY_FS),
         fixtures: createProgram(gl, FIXTURE_VS, FIXTURE_FS),
         pitchedRoofs: createProgram(gl, PITCHED_ROOF_VS, PITCHED_ROOF_FS),
+        trees: createProgram(gl, TREE_VS, TREE_FS),
         parapet: createProgram(gl, PARAPET_VS, PARAPET_FS),
         roof: createProgram(gl, ROOF_VS, ROOF_FS),
         equipment: createProgram(gl, EQUIPMENT_VS, EQUIPMENT_FS),
@@ -602,7 +647,8 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
       this.post(0, { type: 'build', requestId, tileId: GEOJSON_TILE, source: { ...source, url: resolve(source.url) } });
     } else {
       const urls = (Array.isArray(source.url) ? source.url : [source.url]).map(resolve);
-      loadTilesets(urls).then(
+      const vegetation = (source.vegetation === undefined ? [] : Array.isArray(source.vegetation) ? source.vegetation : [source.vegetation]).map(resolve);
+      loadTilesets(urls, vegetation).then(
         ({ tileset, failures }) => {
           if (generation !== this.generation) return;
           this.tileset = tileset;
@@ -632,7 +678,7 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
     this._loaded = false;
     if (this.programs) {
       const p = this.programs;
-      for (const prog of [p.facade, p.balconies, p.fixtures, p.pitchedRoofs, p.parapet, p.roof, p.equipment, p.lights]) gl.deleteProgram(prog.program);
+      for (const prog of [p.facade, p.balconies, p.fixtures, p.pitchedRoofs, p.trees, p.parapet, p.roof, p.equipment, p.lights]) gl.deleteProgram(prog.program);
       gl.deleteTexture(p.styleTexture);
       gl.deleteTexture(p.materials.texture);
     }
@@ -809,6 +855,18 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
       }, DETAIL_MIN_PX_PER_METER.equipment);
     }
 
+    // 植生の木
+    if (this._vegetation && effects) {
+      const p = programs.trees;
+      use(p);
+      gl.uniform1f(p.uniforms.u_season, SEASONS.indexOf(this._season));
+      forEachTile(p, (t) => {
+        if (t.trees.instanceCount === 0) return;
+        gl.bindVertexArray(t.trees.vao);
+        gl.drawElementsInstanced(gl.TRIANGLES, t.trees.count, gl.UNSIGNED_SHORT, 0, t.trees.instanceCount);
+      }, DETAIL_MIN_PX_PER_METER.trees);
+    }
+
     // 航空障害灯（加算合成、深度は書かない）
     const lights = roof.aviationLights;
     if (effects && lights.enabled && L.night > 0.02) {
@@ -976,7 +1034,7 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
       this.tiles.set(node.id, { id: node.id, node, state: 'loading', requestId, requestedAt: performance.now(), lastUsed: performance.now(), owner: worker });
       this.inFlight++;
     }
-    this.post(worker, { type: 'tile', requestId, tileId: node.id, url: node.contentUrl!, transform: node.transform, remesh });
+    this.post(worker, { type: 'tile', requestId, tileId: node.id, url: node.contentUrl!, transform: node.transform, remesh, vegetation: isVegetationTile(node.id) || undefined });
   }
 
   private unloadTile(e: TileEntry): void {
@@ -1117,6 +1175,7 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
       parapets: createIndexView(gl, walls, mesh.parapetIndices, WALL_STRIDE, WALL_ATTRIBUTES),
       roofs: createMesh(gl, mesh.roofs, mesh.roofIndices, ROOF_STRIDE, ROOF_ATTRIBUTES),
       equipment: createInstancedMesh(gl, unitBox(), { data: mesh.equipment, stride: EQUIPMENT_STRIDE, attributes: EQUIPMENT_ATTRIBUTES }),
+      trees: createInstancedMesh(gl, treeMesh(), { data: mesh.trees, stride: TREE_STRIDE, attributes: TREE_ATTRIBUTES }),
       lights: createPointMesh(gl, mesh.lights, LIGHT_STRIDE, LIGHT_ATTRIBUTES),
       balconies: createMesh(gl, mesh.balconies, mesh.balconyIndices, BALCONY_STRIDE, BALCONY_ATTRIBUTES),
       fixtures: createMesh(gl, mesh.fixtures, mesh.fixtureIndices, FIXTURE_STRIDE, FIXTURE_ATTRIBUTES),
@@ -1133,7 +1192,8 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
 
     // 隣り合うタイルのどちらかが、相手の建物を見ずにメッシュを作っていたら、壁面の判定が古い（作り直しは updateTiles で表示中のものだけ行う）。
     // Worker は並行して動き、建物は Worker どうしで送り合うので、届く前に作ったメッシュはここで見つけて作り直す
-    if (entry.id !== GEOJSON_TILE) {
+    // 植生のタイルは建物の壁面の判定に関わらないので、突き合わせない
+    if (entry.id !== GEOJSON_TILE && !isVegetationTile(entry.id)) {
       entry.bounds = stats.bounds;
       entry.known = new Set(msg.knownTiles);
       markStaleNeighbors(entry, this.tiles.values());
@@ -1225,7 +1285,7 @@ function uploadMaterials(gl: WebGL2RenderingContext, mat: MaterialGpu, textures:
 }
 
 function deleteTileGpu(gl: WebGL2RenderingContext, t: TileGpu): void {
-  for (const mesh of [t.walls, t.parapets, t.roofs, t.equipment, t.lights, t.balconies, t.fixtures, t.pitchedRoofs]) deleteMesh(gl, mesh);
+  for (const mesh of [t.walls, t.parapets, t.roofs, t.equipment, t.lights, t.balconies, t.fixtures, t.pitchedRoofs, t.trees]) deleteMesh(gl, mesh);
   gl.deleteTexture(t.wallSegments);
   deleteTileGround(gl, t.ground);
 }
@@ -1268,6 +1328,7 @@ function aggregateStats(list: BuildingStats[]): BuildingStats | null {
     out.facades.side += s.facades.side;
     out.facades.party += s.facades.party;
     out.facades.sunSide += s.facades.sunSide;
+    if (s.trees) out.trees = (out.trees ?? 0) + s.trees;
     out.bounds = [
       Math.min(out.bounds[0], s.bounds[0]),
       Math.min(out.bounds[1], s.bounds[1]),

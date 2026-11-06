@@ -4,6 +4,8 @@ export {
   BuildingFacadeLayer,
   CATEGORY_COLORS,
   FACADE_COLORS,
+  SEASONS,
+  type Season,
   type BuildingFacadeLayerOptions,
   type BuildingFacadeLayerEvents,
   type TileStatus,

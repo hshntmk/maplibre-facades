@@ -137,6 +137,60 @@ export function createPointMesh(gl: WebGL2RenderingContext, data: Float32Array, 
   return { vao, buffers: [vbo], count: data.length / stride };
 }
 
+/**
+ * 木の形: 幹（六角柱、半径 1・高さ 0–1）と樹冠（半径 1 の球、正二十面体を 1 回分割した 80 面）。頂点は位置 + 法線 + 部位（0 = 幹、1 = 樹冠）。
+ * 大きさと樹冠の形（楕円体・円錐）は頂点シェーダでインスタンスごとに決める
+ */
+export function treeMesh(): { vertices: Float32Array; indices: Uint16Array; stride: number; attributes: Attribute[] } {
+  const v: number[] = [];
+  const idx: number[] = [];
+  // 幹
+  for (let i = 0; i < 6; i++) {
+    const a0 = (i / 6) * Math.PI * 2, a1 = ((i + 1) / 6) * Math.PI * 2, am = (a0 + a1) / 2;
+    const n = [Math.cos(am), Math.sin(am), 0];
+    const b = v.length / 7;
+    for (const [a, z] of [[a0, 0], [a1, 0], [a1, 1], [a0, 1]] as const) v.push(Math.cos(a), Math.sin(a), z, ...n, 0);
+    idx.push(b, b + 1, b + 2, b, b + 2, b + 3);
+  }
+  // 樹冠: 正二十面体を 1 回分割
+  const t = (1 + Math.sqrt(5)) / 2;
+  let verts: number[][] = [[-1, t, 0], [1, t, 0], [-1, -t, 0], [1, -t, 0], [0, -1, t], [0, 1, t], [0, -1, -t], [0, 1, -t], [t, 0, -1], [t, 0, 1], [-t, 0, -1], [-t, 0, 1]].map((p) => {
+    const l = Math.hypot(...p);
+    return p.map((c) => c / l);
+  });
+  let faces = [[0, 11, 5], [0, 5, 1], [0, 1, 7], [0, 7, 10], [0, 10, 11], [1, 5, 9], [5, 11, 4], [11, 10, 2], [10, 7, 6], [7, 1, 8], [3, 9, 4], [3, 4, 2], [3, 2, 6], [3, 6, 8], [3, 8, 9], [4, 9, 5], [2, 4, 11], [6, 2, 10], [8, 6, 7], [9, 8, 1]];
+  const mid = new Map<string, number>();
+  const midpoint = (a: number, b: number) => {
+    const k = a < b ? `${a}_${b}` : `${b}_${a}`;
+    let m = mid.get(k);
+    if (m === undefined) {
+      const p = verts[a].map((c, i) => c + verts[b][i]);
+      const l = Math.hypot(...p);
+      verts.push(p.map((c) => c / l));
+      mid.set(k, (m = verts.length - 1));
+    }
+    return m;
+  };
+  faces = faces.flatMap(([a, b, c]) => {
+    const ab = midpoint(a, b), bc = midpoint(b, c), ca = midpoint(c, a);
+    return [[a, ab, ca], [b, bc, ab], [c, ca, bc], [ab, bc, ca]];
+  });
+  const base = v.length / 7;
+  for (const p of verts) v.push(p[0], p[1], p[2], p[0], p[1], p[2], 1);
+  for (const f of faces) idx.push(base + f[0], base + f[1], base + f[2]);
+  verts = [];
+  return {
+    vertices: new Float32Array(v),
+    indices: new Uint16Array(idx),
+    stride: 7,
+    attributes: [
+      { location: 0, size: 3, offset: 0 },
+      { location: 1, size: 3, offset: 3 },
+      { location: 5, size: 1, offset: 6 },
+    ],
+  };
+}
+
 /** 底面のない単位立方体（x, y: -0.5..0.5, z: 0..1）。頂点は位置 + 法線 */
 export function unitBox(): { vertices: Float32Array; indices: Uint16Array; stride: number; attributes: Attribute[] } {
   const faces: { n: [number, number, number]; c: [number, number, number][] }[] = [

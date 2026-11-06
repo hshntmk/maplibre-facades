@@ -67,6 +67,10 @@ async function fetchJson(url: string): Promise<{ root: TileJson; geometricError?
   }
 }
 
+/** 植生のタイルセットのタイル ID の先頭 */
+export const VEGETATION_PREFIX = 'v';
+export const isVegetationTile = (id: string): boolean => id.startsWith(VEGETATION_PREFIX);
+
 export interface Tileset {
   url: string;
   root: TileNode;
@@ -118,9 +122,17 @@ export async function loadTileset(url: string, idPrefix = 'r'): Promise<Tileset>
  * 複数のタイルセット（区ごとに分かれた PLATEAU のデータなど）を、中身のない親の下に束ねて 1 本の木にする。
  * 読み込めなかったタイルセットは除いて続け、失敗は failures で返す。
  */
-export async function loadTilesets(urls: string[]): Promise<{ tileset: Tileset; failures: { url: string; error: unknown }[] }> {
-  if (urls.length === 1) return { tileset: await loadTileset(urls[0]), failures: [] };
-  const results = await Promise.allSettled(urls.map((u, i) => loadTileset(u, `t${i}`)));
+export async function loadTilesets(
+  urls: string[],
+  vegetationUrls: string[] = [],
+): Promise<{ tileset: Tileset; failures: { url: string; error: unknown }[] }> {
+  if (urls.length === 1 && !vegetationUrls.length) return { tileset: await loadTileset(urls[0]), failures: [] };
+  // 植生のタイルセットのタイル ID は VEGETATION_PREFIX で始める（メインスレッドが植生のタイルとして Worker に依頼する）
+  const results = await Promise.allSettled([
+    ...urls.map((u, i) => loadTileset(u, `t${i}`)),
+    ...vegetationUrls.map((u, i) => loadTileset(u, `${VEGETATION_PREFIX}${i}`)),
+  ]);
+  urls = [...urls, ...vegetationUrls];
   const loaded: Tileset[] = [];
   const failures: { url: string; error: unknown }[] = [];
   results.forEach((r, i) => (r.status === 'fulfilled' ? loaded.push(r.value) : failures.push({ url: urls[i], error: r.reason })));

@@ -2,10 +2,11 @@ import * as maplibregl from 'maplibre-gl';
 // maplibre-gl v6 は自身の Worker を import.meta.url 基準で探すが、本番ビルドではそのファイルが出力されないので、Vite に Worker として取り込ませて URL を渡す
 import mapLibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import { TOKYO_23_WARDS } from './tokyo23';
+import { VEGETATION_TILESETS } from './vegetation';
 import { FUKUOKA_WARDS, HIROSHIMA_WARDS, NIIGATA_WARDS, OSAKA_WARDS, SAPPORO_WARDS, SENDAI_WARDS } from './cities';
 import { CloudLayer } from './clouds';
 import { GSI_DEM_PROTOCOL, registerGsiDemProtocol } from './gsiTerrain';
-import { BUILDING_CATEGORIES, BuildingFacadeLayer, CATEGORY_COLORS, clearTileCache, tileCacheUsage, type BuildingStats, type DebugMode, type RGB } from 'maplibre-facades';
+import { BUILDING_CATEGORIES, BuildingFacadeLayer, CATEGORY_COLORS, clearTileCache, tileCacheUsage, type BuildingStats, type DebugMode, type RGB, type Season } from 'maplibre-facades';
 
 maplibregl.setWorkerUrl(mapLibreWorkerUrl);
 registerGsiDemProtocol();
@@ -115,6 +116,7 @@ const layer = new BuildingFacadeLayer({
       : {
           type: '3dtiles',
           url: [...TOKYO_23_WARDS, ...SAPPORO_WARDS, ...SENDAI_WARDS, ...NIIGATA_WARDS, ...OSAKA_WARDS, ...HIROSHIMA_WARDS, ...FUKUOKA_WARDS].map((w) => w.url),
+          vegetation: VEGETATION_TILESETS.map((v) => v.url),
         },
   adapter: { name: 'plateau' },
   // 確認用: ?workers=N で Worker の数を変えられる（既定は CPU のコア数の半分、1〜4）
@@ -239,6 +241,8 @@ $<HTMLSelectElement>('effects').addEventListener('change', (e) => layer.setEffec
 $<HTMLInputElement>('interior').addEventListener('change', (e) => layer.setInterior((e.target as HTMLInputElement).checked));
 $<HTMLInputElement>('balconies').addEventListener('change', (e) => layer.setBalconies((e.target as HTMLInputElement).checked));
 $<HTMLInputElement>('solid-fixtures').addEventListener('change', (e) => layer.setSolidFixtures((e.target as HTMLInputElement).checked));
+$<HTMLInputElement>('vegetation').addEventListener('change', (e) => layer.setVegetation((e.target as HTMLInputElement).checked));
+$<HTMLSelectElement>('season').addEventListener('change', (e) => layer.setSeason((e.target as HTMLSelectElement).value as Season));
 const checked = (id: string) => $<HTMLInputElement>(id).checked;
 const updateRoof = () =>
   layer.setRoof({

@@ -8,6 +8,8 @@ import { parseTileContent, usesDraco } from '../sources/tiles3d/content';
 import { getDracoModule } from '../sources/tiles3d/draco';
 import { featuresFromTile } from '../sources/tiles3d/footprints';
 import type { SourceFeature } from '../sources/SourceConfig';
+import { FacadeMeshBuilder, createReference } from '../mesh/FacadeMeshBuilder';
+import { buildVegetation } from '../mesh/Vegetation';
 import { RecordFactory, meshRecords, type StyledRecord } from './buildPipeline';
 import { TileCache, createTileCache } from './TileCache';
 import { TileStore, toObstacle } from './TileStore';
@@ -41,8 +43,37 @@ async function fetchBytes(url: string): Promise<Uint8Array> {
 }
 
 function post(msg: WorkerResponse, mesh?: FacadeMesh) {
-  if (mesh) self.postMessage(msg, [mesh.walls.buffer, mesh.wallIndices.buffer, mesh.wallSegments.buffer, mesh.parapetIndices.buffer, mesh.roofs.buffer, mesh.roofIndices.buffer, mesh.equipment.buffer, mesh.lights.buffer, mesh.balconies.buffer, mesh.balconyIndices.buffer, mesh.fixtures.buffer, mesh.fixtureIndices.buffer, mesh.pitchedRoofs.buffer, mesh.pitchedRoofIndices.buffer, mesh.grounds.buffer]);
+  if (mesh) self.postMessage(msg, [mesh.walls.buffer, mesh.wallIndices.buffer, mesh.wallSegments.buffer, mesh.parapetIndices.buffer, mesh.roofs.buffer, mesh.roofIndices.buffer, mesh.equipment.buffer, mesh.lights.buffer, mesh.balconies.buffer, mesh.balconyIndices.buffer, mesh.fixtures.buffer, mesh.fixtureIndices.buffer, mesh.pitchedRoofs.buffer, mesh.pitchedRoofIndices.buffer, mesh.trees.buffer, mesh.grounds.buffer]);
   else self.postMessage(msg);
+}
+
+/** 植生のタイルのメッシュ（建物の部分は空）と統計（建物 0 棟） */
+function vegetationMesh(features: SourceFeature[]) {
+  let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
+  for (const f of features) {
+    if (f.geometry.kind !== 'footprint') continue;
+    for (const [lng, lat] of f.geometry.polygons[0]?.[0] ?? []) {
+      w = Math.min(w, lng);
+      s = Math.min(s, lat);
+      e = Math.max(e, lng);
+      n = Math.max(n, lat);
+    }
+  }
+  const reference = createReference(Number.isFinite(w) ? (w + e) / 2 : 0, Number.isFinite(s) ? (s + n) / 2 : 0);
+  const veg = buildVegetation(features, reference);
+  const { facadeLengths, ...empty } = new FacadeMeshBuilder(reference).build();
+  const mesh = { ...empty, trees: veg.trees, grounds: veg.grounds, radius: veg.radius };
+  const stats = {
+    total: 0,
+    skipped: 0,
+    byCategory: {},
+    byStyle: {},
+    estimated: { height: 0, storeys: 0, category: 0 },
+    facades: facadeLengths,
+    bounds: [Infinity, Infinity, -Infinity, -Infinity] as [number, number, number, number],
+    trees: veg.count,
+  };
+  return { mesh, stats };
 }
 
 self.onmessage = async (ev: MessageEvent<WorkerRequest>) => {
@@ -112,6 +143,16 @@ self.onmessage = async (ev: MessageEvent<WorkerRequest>) => {
         const draco = usesDraco(buf) ? await getDracoModule(dracoWasmUrl) : undefined;
         features = featuresFromTile(parseTileContent(buf, draco, req.transform));
         if (key) toCache = { key, features };
+      }
+      if (req.vegetation) {
+        // 植生: 木を作って返すだけ（建物の解析・隣のタイルとの突き合わせはしない）
+        const t2 = performance.now();
+        timing.decode = t2 - (timing.cached ? t0 : t1);
+        const veg = vegetationMesh(features);
+        timing.mesh = performance.now() - t2;
+        post({ type: 'built', requestId: req.requestId, tileId: req.tileId, mesh: veg.mesh, stats: veg.stats, timing, knownTiles: [] }, veg.mesh);
+        if (toCache) void tileCache?.put(toCache.key, toCache.features);
+        return;
       }
       const { records, skipped } = await factory.build(features, req.url);
       entry = tiles.set(req.tileId, records, skipped);

@@ -43,6 +43,7 @@
   - 8.7 1 階の構成
   - 8.8 勾配屋根
   - 8.9 遠景の省略
+  - 8.10 植生
 - 9\. 時刻と照明
   - 9.1 `computeLighting()`
   - 9.2 `LightingState`
@@ -141,6 +142,8 @@ new BuildingFacadeLayer(options: BuildingFacadeLayerOptions)
 | `fog` | `boolean` | `true` | MapLibre の sky の霞を建物にもかける。[8.5](#85-地形と霞) を参照。 |
 | `balconies` | `boolean` | `true` | バルコニーを立体で描く。[8.6](#86-バルコニー) を参照。 |
 | `solidFixtures` | `boolean` | `false` | 1 階の庇・テント・突き出し看板を立体で描く。[8.7](#87-1-階の構成) を参照。 |
+| `vegetation` | `boolean` | `true` | 植生（`source.vegetation`）の木を描く。[8.10](#810-植生) を参照。 |
+| `season` | `Season` | `'summer'` | 木の季節。`'spring'` `'summer'` `'autumn'` `'winter'` のいずれか。[8.10](#810-植生) を参照。 |
 | `debug` | `DebugMode` | `'none'` | 色分け表示。[8.4](#84-debugmode) を参照。 |
 | `workerUrl` | `string \| URL` | `undefined` | Worker のスクリプトの URL。[12](#12-worker) を参照。 |
 | `workers` | `number` | CPU のコア数の半分（1–4） | 3D Tiles の処理に使う Worker の数。範囲は 1–16 の整数。GeoJSON では常に 1。[12.3](#123-worker-のプール) を参照。 |
@@ -167,6 +170,8 @@ new BuildingFacadeLayer(options: BuildingFacadeLayerOptions)
 | `fog` | `boolean` | 建物に霞をかけるかどうか。 |
 | `balconies` | `boolean` | バルコニーを立体で描くかどうか。 |
 | `solidFixtures` | `boolean` | 1 階の庇・テント・突き出し看板を立体で描くかどうか。 |
+| `vegetation` | `boolean` | 植生の木を描くかどうか。 |
+| `season` | `Season` | 木の季節。 |
 | `lightingState` | `Readonly<LightingState>` | 現在の時刻から計算した照明。[9.2](#92-lightingstate) を参照。 |
 
 ### 2.4 メソッド
@@ -204,6 +209,14 @@ layer.setTimeOfDay(18.5);
 #### `setSolidFixtures(enabled: boolean): this`
 
 1 階の庇・テント・突き出し看板を立体で描くかどうかを設定する。`false` の場合、庇とテントは外壁の面に描き、突き出し看板は描かない。形は Worker で常に作ってあるため、切り替えてもデータの再読み込みは起きない。詳細は [8.7](#87-1-階の構成) を参照。`enabled` が真偽値でない場合、例外を送出する。
+
+#### `setVegetation(enabled: boolean): this`
+
+植生の木を描くかどうかを設定する。`false` でも植生のタイルの読み込みは続ける。`enabled` が真偽値でない場合、例外を送出する。
+
+#### `setSeason(season: Season): this`
+
+木の季節を設定する。データの再読み込みは起きない。`season` が `SEASONS` の値でない場合、例外を送出する。
 
 #### `setRoof(options: RoofOptions): this`
 
@@ -317,6 +330,7 @@ interface Tiles3DSourceConfig {
   maxCachedTiles?: number;
   dracoWasmUrl?: string;
   cache?: boolean | TileCacheOptions;
+  vegetation?: string | string[];
 }
 ```
 
@@ -327,6 +341,7 @@ interface Tiles3DSourceConfig {
 | `maxCachedTiles` | `number` | `48` | 0–10000 | 描画に使っていないタイルを保持する上限数。上限を超えた分は、最後に使われた時刻が古い順に破棄される。 |
 | `dracoWasmUrl` | `string` | `DEFAULT_DRACO_WASM_URL` | — | `draco_decoder.wasm` の URL。相対 URL は `document.baseURI` を基準に解決される。 |
 | `cache` | `boolean \| TileCacheOptions` | `true` | — | 展開したタイルをブラウザに保存する。[タイルの保存](#タイルの保存) を参照。 |
+| `vegetation` | `string \| string[]` | なし | — | 植生モデル（LOD1）の `tileset.json` の URL。[8.10](#810-植生) を参照。 |
 
 #### タイルの選択
 
@@ -1118,6 +1133,48 @@ M1 の GPU、画面 1600 × 1000、夜の条件で、GPU の処理が終わる�
 | 丸の内を傾けた遠景（ズーム 18.6・ピッチ 72°） | 約 168 ms | 約 73〜95 ms |
 | 神保町の通り（ズーム 19・ピッチ 80°） | 約 149 ms | 約 88〜100 ms |
 
+### 8.10 植生
+
+`source.vegetation` に PLATEAU の植生モデル（LOD1 の 3D Tiles）の `tileset.json` を渡すと、木として描く。建物のタイルと同じく、表示範囲のタイルだけを読み、Worker のプールで処理し、ブラウザに保存する。植生のタイルは建物の壁面の判定に使わない。
+
+```ts
+new BuildingFacadeLayer({
+  id: 'facades',
+  source: {
+    type: '3dtiles',
+    url: chiyodaBuildingsUrl,
+    vegetation: [chiyodaSolitaryTreesUrl, chiyodaPlantCoverUrl],
+  },
+  season: 'autumn',
+});
+```
+
+#### 木の作り方
+
+LOD1 の植生は押し出した多角形なので、建物と同じく外形と高さ（`_zmin`・`_zmax`）を読む。
+
+| 地物 | 描き方 |
+|---|---|
+| 単独木（`veg:SolitaryVegetationObject`） | 外形の重心に 1 本。樹冠の半径は、外形と同じ面積の円の半径と、高さ × 0.22 のうち大きい方（1〜7 m）。高さ 1 m 未満は描かない |
+| 植被（`veg:PlantCover`） | 多角形の中に、格子をずらして並べる。高さ 2.5 m 未満は低木（1.6 m 間隔）、それ以上は木（高さ × 0.55 m、最小 4 m 間隔）。1 つの植被に最大 3000 本で、超える場合は間隔を広げる |
+
+1 タイルに描く木は最大 40000 本。
+
+#### 種類と季節
+
+樹種の属性はほとんど「不明」なので、木ごとに種類を選ぶ。単独木と高さ 2.5 m 以上の植被の木は、落葉広葉樹 45%・常緑広葉樹 30%・針葉樹 10%・桜 15%。樹冠は、広葉樹と桜は楕円体、針葉樹は円錐に近い形にし、ノイズでふくらみを付けて木ごとに形を変える。
+
+| `season` | 落葉広葉樹 | 桜 | 常緑広葉樹・針葉樹・低木 |
+|---|---|---|---|
+| `'spring'` | 明るい新緑 | 花の色 | 緑 |
+| `'summer'` | 緑 | 緑 | 緑 |
+| `'autumn'` | 黄（半分）か赤・橙（半分） | 橙 | 緑 |
+| `'winter'` | 枝だけ（樹冠を網目にして向こうを透かし、幹を上まで見せる） | 枝だけ | 少し暗い緑 |
+
+#### 遠景
+
+タイルのいちばん近い所で 1 m が画面上で 0.3 ピクセル未満のタイルでは、木を描かない（[8.9](#89-遠景の省略)）。葉の細かい明暗は、1 ピクセルが 15 cm より大きくなる距離から平均にする。
+
 ## 9. 時刻と照明
 
 ### 9.1 `computeLighting()`
@@ -1179,6 +1236,7 @@ map.setPaintProperty('background', 'background-color',
 | `estimated` | `{ height: number; storeys: number; category: number }` | 補完した建物の数。 |
 | `facades` | `{ front: number; side: number; party: number; sunSide: number }` | 壁面の分類ごとの延長（m）。`sunSide` は日照面の延長であり、ほかの 3 項目と重複して計上される。 |
 | `bounds` | `[number, number, number, number]` | `[west, south, east, north]`（経緯度）。 |
+| `trees` | `number \| undefined` | 描いている植生の木の本数。植生のタイルがない場合は `undefined`。 |
 
 ### 10.2 `TileTiming`
 
@@ -1336,6 +1394,7 @@ function getWorkerUrl(): string | URL | undefined
 | 投影 | 動作を確かめたのはメルカトル投影だけで、globe 投影は確かめていない。 |
 | 影 | 建物は影を落とさない。バルコニーの中の影だけは、手すりと天井から求めて付ける。 |
 | バルコニー | 外形の内側に引っ込めて作り、外へは張り出さない。階ごと・住戸ごとの違い（バルコニーのない階、形の違い）はない。 |
+| 植生 | LOD1 の植生だけを読む。LOD2・3 の木の形は使わない。樹種は推定で、実際の木とは一致しない。PLATEAU の植生は区の一部（調べた範囲）だけで配信されている。 |
 | 1 階の構成 | 店の種類・入口の位置などは推定で、実際の建物とは一致しない。看板の文字は模様で、読める文字ではない。 |
 | スタイルの数 | 1 レイヤーあたり最大 16 個。 |
 | 3D Tiles | `EXT_structural_metadata` の外部スキーマ（`schemaUri`）は読めない。暗黙的タイリングの S2 範囲は読めない。 |
