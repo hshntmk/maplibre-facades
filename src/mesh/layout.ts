@@ -111,15 +111,24 @@ export const TREE_ATTRIBUTES = [
   { location: 4, size: 3, offset: 6 },
 ];
 
-/** 信号機の部品（floats）。底面のある単位立方体（render/gl.ts の unitBox(true)）をインスタンスごとに拡大・回転して置く */
-export const SIGNAL_STRIDE = 12;
-// 0-2 底面の中心（z は地面からの高さ） | 3-5 length（局所 x）, depth（局所 y）, height | 6 angle（局所 x の向き。灯器は局所 +y が灯面）
-// 7 part（SIGNAL_PARTS） | 8 group（0/1。直交する 2 方向のどちらか） | 9 offset（交差点ごとの周期のずれ s） | 10 rows（灯の段数） | 11 ground
-export const SIGNAL_ATTRIBUTES = [
-  { location: 2, size: 3, offset: 0 },
-  { location: 3, size: 3, offset: 3 },
-  { location: 4, size: 3, offset: 6 },
-  { location: 5, size: 3, offset: 9 },
+/** 都市設備の部品（floats）。底面のある単位立方体（render/gl.ts の unitBox(true)）をインスタンスごとに拡大・回転して置く */
+export const FURNITURE_STRIDE = 13;
+// 0-2 底面の中心（z は地面からの高さ） | 3 angle（局所 x の向き。灯器は局所 +y が灯面） | 4-6 length（局所 x）, depth（局所 y）, height
+// 7 part（FURNITURE_PARTS） | 8 variant（信号: 直交する 2 方向のどちらか、標識: SIGN_KINDS、街灯: 0 = 白色 / 1 = 橙色）
+// 9 phase（信号: 交差点ごとの周期のずれ s、標識: 図柄の乱数） | 10 shape（信号: 灯の段数、標識: 板の形） | 11 owner（FURNITURE_OWNERS） | 12 ground
+export const FURNITURE_ATTRIBUTES = [
+  { location: 2, size: 4, offset: 0 },
+  { location: 3, size: 4, offset: 4 },
+  { location: 4, size: 4, offset: 8 },
+  { location: 5, size: 1, offset: 12 },
+];
+
+/** 路面標示の頂点（floats） */
+export const MARKING_STRIDE = 5;
+// 0-2 pos（z は地面からの高さ） | 3 kind（0 = 線・記号, 1 = 横断歩道, 2 = 停止線） | 4 ground
+export const MARKING_ATTRIBUTES = [
+  { location: 0, size: 3, offset: 0 },
+  { location: 1, size: 2, offset: 3 },
 ];
 
 /** 航空障害灯（floats）。点として描画する */
@@ -174,8 +183,11 @@ export interface FacadeMesh {
   fixtureIndices: Uint32Array;
   /** 植生の木（TREE_STRIDE ごとのインスタンス）。植生のタイルだけが持つ */
   trees: Float32Array;
-  /** 信号機の灯器・柱・腕木（SIGNAL_STRIDE ごとのインスタンス）。都市設備のタイルだけが持つ */
-  signals: Float32Array;
+  /** 都市設備の部品（信号機・街灯・標識。FURNITURE_STRIDE ごとのインスタンス）。都市設備のタイルだけが持つ */
+  furniture: Float32Array;
+  /** 路面標示（横断歩道・停止線・区画線など）。都市設備のタイルだけが持つ */
+  markings: Float32Array;
+  markingIndices: Uint32Array;
   /** 戸建ての勾配屋根（切妻・寄棟・片流れ） */
   pitchedRoofs: Float32Array;
   pitchedRoofIndices: Uint32Array;

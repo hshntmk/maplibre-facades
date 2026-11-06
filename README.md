@@ -79,7 +79,7 @@ layer.setWeathering(false);
 | `balconies` | `true` | 共同住宅のバルコニーを立体で描く |
 | `solidFixtures` | `false` | 1 階の庇・テント・突き出し看板を立体で描く |
 | `vegetation` / `season` | `true` / `'summer'` | 植生の木を描く / 木の季節（春は桜、秋は紅葉、冬は落葉） |
-| `trafficSignals` | `true` | 都市設備の信号機を描く。灯色は時間とともに変わる |
+| `trafficSignals` / `streetLights` / `roadSigns` / `roadMarkings` | すべて `true` | 都市設備の信号機・街灯・道路標識・路面標示を描く。信号の灯色は時間とともに変わり、街灯は夜に路面を照らす |
 | `terrain` / `fog` | `true` / `true` | MapLibre の地形に建物を載せる / sky の霞を建物にもかける |
 | `workers` | CPU のコア数の半分（1〜4） | 3D Tiles の処理に使う Worker の数 |
 
@@ -92,7 +92,7 @@ layer.setWeathering(false);
 | `cache` | `{ maxSizeMB: 200, maxAgeDays: 2 }` | 展開したタイルをブラウザ（IndexedDB）に保存し、次からはダウンロードを省く。`false` で保存しない |
 | `dracoWasmUrl` | jsDelivr の `draco3d@1.5.7/draco_decoder.wasm` | Draco の展開に使う wasm。外部の CDN を使えない環境では自分で置いて指定する |
 | `vegetation` | なし | PLATEAU の植生モデル（LOD1）の tileset.json。単独木と植被を木として描く |
-| `cityFurniture` | なし | PLATEAU の都市設備モデル（LOD1）の tileset.json。いまは交通信号機だけを描く |
+| `cityFurniture` | なし | PLATEAU の都市設備モデル（LOD1）の tileset.json。信号機・街灯・道路標識・路面標示を描く |
 
 建物の種類ごとの見た目（窓の間隔、外壁の色の候補、1 階の構成、勾配屋根の割合など）は、スタイルを上書きして変えます。
 
@@ -168,7 +168,7 @@ npm run demo:build     # デモを examples/chiyoda/dist に出力
 | `src/sources/` | GeoJSON と 3D Tiles（タイルの選択、b3dm / glb の解析、フットプリントの復元） |
 | `src/adapters/` | PLATEAU と宣言的アダプタ |
 | `src/style/` | スタイルの定義、プリセット、選択ルール |
-| `src/mesh/` | 壁面の解析、壁・屋根・バルコニー・1 階の部材・勾配屋根のメッシュ、植生の木と信号機 |
+| `src/mesh/` | 壁面の解析、壁・屋根・バルコニー・1 階の部材・勾配屋根のメッシュ、植生の木と都市設備 |
 | `src/render/` | シェーダ |
 | `src/worker/` | Worker 本体、パイプライン、タイルの保存（IndexedDB） |
 | `examples/chiyoda/` | デモ |

@@ -117,6 +117,9 @@ export function validateLayerOptions(opts: {
   vegetation?: unknown;
   season?: unknown;
   trafficSignals?: unknown;
+  streetLights?: unknown;
+  roadSigns?: unknown;
+  roadMarkings?: unknown;
   workers?: unknown;
   debug?: unknown;
 }): void {
@@ -163,7 +166,9 @@ export function validateLayerOptions(opts: {
   if (opts.balconies !== undefined && typeof opts.balconies !== 'boolean') fail('balconies must be a boolean');
   if (opts.solidFixtures !== undefined && typeof opts.solidFixtures !== 'boolean') fail('solidFixtures must be a boolean');
   if (opts.vegetation !== undefined && typeof opts.vegetation !== 'boolean') fail('vegetation must be a boolean');
-  if (opts.trafficSignals !== undefined && typeof opts.trafficSignals !== 'boolean') fail('trafficSignals must be a boolean');
+  for (const name of ['trafficSignals', 'streetLights', 'roadSigns', 'roadMarkings'] as const) {
+    if (opts[name] !== undefined && typeof opts[name] !== 'boolean') fail(`${name} must be a boolean`);
+  }
   if (opts.season !== undefined && !['spring', 'summer', 'autumn', 'winter'].includes(opts.season as string)) fail(`season must be 'spring', 'summer', 'autumn' or 'winter'`);
   if (opts.workers !== undefined && (!Number.isInteger(opts.workers) || (opts.workers as number) < 1 || (opts.workers as number) > 16)) fail(`workers must be an integer between 1 and 16 (got ${JSON.stringify(opts.workers)})`);
   if (opts.debug !== undefined && !(DEBUG_MODES as readonly unknown[]).includes(opts.debug)) fail(`unknown debug mode: ${opts.debug}`);

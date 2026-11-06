@@ -14,8 +14,10 @@ import {
   PITCHED_ROOF_ATTRIBUTES,
   PITCHED_ROOF_STRIDE,
   EQUIPMENT_STRIDE,
-  SIGNAL_ATTRIBUTES,
-  SIGNAL_STRIDE,
+  FURNITURE_ATTRIBUTES,
+  FURNITURE_STRIDE,
+  MARKING_ATTRIBUTES,
+  MARKING_STRIDE,
   LIGHT_ATTRIBUTES,
   LIGHT_STRIDE,
   ROOF_ATTRIBUTES,
@@ -30,8 +32,11 @@ import {
   BALCONY_FS,
   BALCONY_VS,
   EQUIPMENT_FS,
-  SIGNAL_FS,
-  SIGNAL_VS,
+  FURNITURE_FS,
+  FURNITURE_POOL_FS,
+  FURNITURE_VS,
+  MARKING_FS,
+  MARKING_VS,
   TREE_FS,
   TREE_VS,
   FIXTURE_FS,
@@ -143,6 +148,12 @@ export interface BuildingFacadeLayerOptions {
   season?: Season;
   /** 都市設備（`source.cityFurniture`）の信号機を描く（既定 true）。灯色は時刻とともに変わる */
   trafficSignals?: boolean;
+  /** 都市設備の街灯を描く（既定 true）。夜は灯具が光り、路面を照らす */
+  streetLights?: boolean;
+  /** 都市設備の道路標識を描く（既定 true） */
+  roadSigns?: boolean;
+  /** 都市設備の路面標示（横断歩道・停止線・区画線など）を描く（既定 true） */
+  roadMarkings?: boolean;
   debug?: DebugMode;
   /** ワーカーの URL。省略時はバンドル内に埋め込んだワーカーを使う（setWorkerUrl() で全体の既定も変えられる） */
   workerUrl?: string | URL;
@@ -185,7 +196,9 @@ interface Programs {
   fixtures: Program;
   pitchedRoofs: Program;
   trees: Program;
-  signals: Program;
+  furniture: Program;
+  furniturePool: Program;
+  markings: Program;
   parapet: Program;
   roof: Program;
   equipment: Program;
@@ -220,7 +233,10 @@ interface TileGpu {
   fixtures: MeshBuffers;
   pitchedRoofs: MeshBuffers;
   trees: MeshBuffers & { instanceCount: number };
-  signals: MeshBuffers & { instanceCount: number };
+  furniture: MeshBuffers & { instanceCount: number };
+  markings: MeshBuffers;
+  /** 信号機の灯器の数（灯色の描き直しに使う） */
+  signals: number;
   /** 建物ごとの地形の標高 */
   ground: TileGround;
   /** 描画のたびに計算する、局所座標 → クリップの行列とカメラ位置 */
@@ -300,6 +316,9 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
   private _vegetation: boolean;
   private _season: Season;
   private _trafficSignals: boolean;
+  private _streetLights: boolean;
+  private _roadSigns: boolean;
+  private _roadMarkings: boolean;
   /** 信号の灯色が変わるのに合わせて描き直すタイマー */
   private signalTimer?: ReturnType<typeof setTimeout>;
   /** 地形の版。地形が変わるたびに増やし、タイルの標高が古ければ引き直す */
@@ -359,6 +378,9 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
     this._vegetation = options.vegetation ?? true;
     this._season = options.season ?? 'summer';
     this._trafficSignals = options.trafficSignals ?? true;
+    this._streetLights = options.streetLights ?? true;
+    this._roadSigns = options.roadSigns ?? true;
+    this._roadMarkings = options.roadMarkings ?? true;
   }
 
   // ---------------------------------------------------------------- state
@@ -446,6 +468,21 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
   /** 信号機を描くか */
   get trafficSignals(): boolean {
     return this._trafficSignals;
+  }
+
+  /** 街灯を描くか */
+  get streetLights(): boolean {
+    return this._streetLights;
+  }
+
+  /** 道路標識を描くか */
+  get roadSigns(): boolean {
+    return this._roadSigns;
+  }
+
+  /** 路面標示を描くか */
+  get roadMarkings(): boolean {
+    return this._roadMarkings;
   }
 
   get lightingState(): Readonly<LightingState> {
@@ -550,10 +587,33 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
 
   /** 信号機を描くか（描かなくても読み込みは続ける） */
   setTrafficSignals(enabled: boolean): this {
-    if (typeof enabled !== 'boolean') throw new BuildingFacadeLayerError('options', `trafficSignals must be a boolean (got ${enabled})`);
-    this._trafficSignals = enabled;
-    this.map?.triggerRepaint();
+    this._trafficSignals = this.checkFlag('trafficSignals', enabled);
     return this;
+  }
+
+  /** 街灯を描くか（描かなくても読み込みは続ける） */
+  setStreetLights(enabled: boolean): this {
+    this._streetLights = this.checkFlag('streetLights', enabled);
+    return this;
+  }
+
+  /** 道路標識を描くか（描かなくても読み込みは続ける） */
+  setRoadSigns(enabled: boolean): this {
+    this._roadSigns = this.checkFlag('roadSigns', enabled);
+    return this;
+  }
+
+  /** 路面標示を描くか（描かなくても読み込みは続ける） */
+  setRoadMarkings(enabled: boolean): this {
+    this._roadMarkings = this.checkFlag('roadMarkings', enabled);
+    return this;
+  }
+
+  /** 真偽値の設定を確かめ、描き直しを予約する */
+  private checkFlag(name: string, enabled: boolean): boolean {
+    if (typeof enabled !== 'boolean') throw new BuildingFacadeLayerError('options', `${name} must be a boolean (got ${enabled})`);
+    this.map?.triggerRepaint();
+    return enabled;
   }
 
   /** 木の季節。データの再読み込みは起きない */
@@ -600,7 +660,9 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
         fixtures: createProgram(gl, FIXTURE_VS, FIXTURE_FS),
         pitchedRoofs: createProgram(gl, PITCHED_ROOF_VS, PITCHED_ROOF_FS),
         trees: createProgram(gl, TREE_VS, TREE_FS),
-        signals: createProgram(gl, SIGNAL_VS, SIGNAL_FS),
+        furniture: createProgram(gl, FURNITURE_VS, FURNITURE_FS),
+        furniturePool: createProgram(gl, FURNITURE_VS, FURNITURE_POOL_FS),
+        markings: createProgram(gl, MARKING_VS, MARKING_FS),
         parapet: createProgram(gl, PARAPET_VS, PARAPET_FS),
         roof: createProgram(gl, ROOF_VS, ROOF_FS),
         equipment: createProgram(gl, EQUIPMENT_VS, EQUIPMENT_FS),
@@ -672,7 +734,7 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
     this._loaded = false;
     if (this.programs) {
       const p = this.programs;
-      for (const prog of [p.facade, p.balconies, p.fixtures, p.pitchedRoofs, p.trees, p.signals, p.parapet, p.roof, p.equipment, p.lights]) gl.deleteProgram(prog.program);
+      for (const prog of [p.facade, p.balconies, p.fixtures, p.pitchedRoofs, p.trees, p.furniture, p.furniturePool, p.markings, p.parapet, p.roof, p.equipment, p.lights]) gl.deleteProgram(prog.program);
       gl.deleteTexture(p.styleTexture);
       gl.deleteTexture(p.materials.texture);
     }
@@ -861,24 +923,52 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
       }, DETAIL_MIN_PX_PER_METER.trees);
     }
 
-    // 信号機
-    if (this._trafficSignals && effects) {
-      const p = programs.signals;
+    // 都市設備: 路面標示、信号機・街灯・標識の部品
+    if (effects && this._roadMarkings) {
+      use(programs.markings);
+      forEachTile(programs.markings, (t) => {
+        if (t.markings.count === 0) return;
+        gl.bindVertexArray(t.markings.vao);
+        gl.drawElements(gl.TRIANGLES, t.markings.count, gl.UNSIGNED_INT, 0);
+      }, DETAIL_MIN_PX_PER_METER.markings);
+    }
+    const show = [this._trafficSignals ? 1 : 0, this._streetLights ? 1 : 0, this._roadSigns ? 1 : 0];
+    if (effects && show.some((v) => v)) {
+      const p = programs.furniture;
       use(p);
       gl.uniform1f(p.uniforms.u_time, (performance.now() / 1000) % 3600);
-      let drawn = false;
+      gl.uniform3fv(p.uniforms.u_show, show);
+      gl.uniform1f(p.uniforms.u_pass, 0);
+      let signals = false;
       forEachTile(p, (t) => {
-        if (t.signals.instanceCount === 0) return;
-        drawn = true;
-        gl.bindVertexArray(t.signals.vao);
-        gl.drawElementsInstanced(gl.TRIANGLES, t.signals.count, gl.UNSIGNED_SHORT, 0, t.signals.instanceCount);
-      }, DETAIL_MIN_PX_PER_METER.signals);
-      // 灯色は秒単位で変わるので、見えている間は次の秒の境目に描き直す
-      if (drawn && this.signalTimer === undefined) {
+        if (t.furniture.instanceCount === 0) return;
+        if (t.signals) signals = true;
+        gl.bindVertexArray(t.furniture.vao);
+        gl.drawElementsInstanced(gl.TRIANGLES, t.furniture.count, gl.UNSIGNED_SHORT, 0, t.furniture.instanceCount);
+      }, DETAIL_MIN_PX_PER_METER.furniture);
+      // 信号の灯色は秒単位で変わるので、見えている間は次の秒の境目に描き直す
+      if (signals && this._trafficSignals && this.signalTimer === undefined) {
         this.signalTimer = setTimeout(() => {
           this.signalTimer = undefined;
           this.map?.triggerRepaint();
         }, 1000 - (performance.now() % 1000) + 5);
+      }
+      // 街灯が路面を照らす光（夜だけ。加算合成、深度は書かない）
+      if (this._streetLights && L.night > 0.02) {
+        const q = programs.furniturePool;
+        use(q);
+        gl.uniform3fv(q.uniforms.u_show, show);
+        gl.uniform1f(q.uniforms.u_pass, 1);
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.ONE, gl.ONE);
+        gl.depthMask(false);
+        forEachTile(q, (t) => {
+          if (t.furniture.instanceCount === 0) return;
+          gl.bindVertexArray(t.furniture.vao);
+          gl.drawElementsInstanced(gl.TRIANGLES, t.furniture.count, gl.UNSIGNED_SHORT, 0, t.furniture.instanceCount);
+        }, DETAIL_MIN_PX_PER_METER.markings);
+        gl.depthMask(true);
+        gl.disable(gl.BLEND);
       }
     }
 
@@ -1191,7 +1281,9 @@ export class BuildingFacadeLayer extends Evented<BuildingFacadeLayerEvents> impl
       roofs: createMesh(gl, mesh.roofs, mesh.roofIndices, ROOF_STRIDE, ROOF_ATTRIBUTES),
       equipment: createInstancedMesh(gl, unitBox(), { data: mesh.equipment, stride: EQUIPMENT_STRIDE, attributes: EQUIPMENT_ATTRIBUTES }),
       trees: createInstancedMesh(gl, treeMesh(), { data: mesh.trees, stride: TREE_STRIDE, attributes: TREE_ATTRIBUTES }),
-      signals: createInstancedMesh(gl, unitBox(true), { data: mesh.signals, stride: SIGNAL_STRIDE, attributes: SIGNAL_ATTRIBUTES }),
+      furniture: createInstancedMesh(gl, unitBox(true), { data: mesh.furniture, stride: FURNITURE_STRIDE, attributes: FURNITURE_ATTRIBUTES }),
+      markings: createMesh(gl, mesh.markings, mesh.markingIndices, MARKING_STRIDE, MARKING_ATTRIBUTES),
+      signals: stats.signals ?? 0,
       lights: createPointMesh(gl, mesh.lights, LIGHT_STRIDE, LIGHT_ATTRIBUTES),
       balconies: createMesh(gl, mesh.balconies, mesh.balconyIndices, BALCONY_STRIDE, BALCONY_ATTRIBUTES),
       fixtures: createMesh(gl, mesh.fixtures, mesh.fixtureIndices, FIXTURE_STRIDE, FIXTURE_ATTRIBUTES),
@@ -1297,7 +1389,7 @@ function uploadMaterials(gl: WebGL2RenderingContext, mat: MaterialGpu, textures:
 }
 
 function deleteTileGpu(gl: WebGL2RenderingContext, t: TileGpu): void {
-  for (const mesh of [t.walls, t.parapets, t.roofs, t.equipment, t.lights, t.balconies, t.fixtures, t.pitchedRoofs, t.trees, t.signals]) deleteMesh(gl, mesh);
+  for (const mesh of [t.walls, t.parapets, t.roofs, t.equipment, t.lights, t.balconies, t.fixtures, t.pitchedRoofs, t.trees, t.furniture, t.markings]) deleteMesh(gl, mesh);
   gl.deleteTexture(t.wallSegments);
   deleteTileGround(gl, t.ground);
 }

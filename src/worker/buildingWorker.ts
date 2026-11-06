@@ -10,11 +10,11 @@ import { featuresFromTile } from '../sources/tiles3d/footprints';
 import type { SourceFeature } from '../sources/SourceConfig';
 import { FacadeMeshBuilder, createReference } from '../mesh/FacadeMeshBuilder';
 import { buildVegetation } from '../mesh/Vegetation';
-import { buildTrafficSignals } from '../mesh/TrafficSignals';
+import { buildStreetFurniture } from '../mesh/StreetFurniture';
 import { RecordFactory, meshRecords, type StyledRecord } from './buildPipeline';
 import { TileCache, createTileCache } from './TileCache';
 import { TileStore, toObstacle } from './TileStore';
-import type { PipelineConfig, WorkerRequest, WorkerResponse } from './protocol';
+import type { BuildingStats, PipelineConfig, WorkerRequest, WorkerResponse } from './protocol';
 
 declare const self: DedicatedWorkerGlobalScope;
 
@@ -44,7 +44,7 @@ async function fetchBytes(url: string): Promise<Uint8Array> {
 }
 
 function post(msg: WorkerResponse, mesh?: FacadeMesh) {
-  if (mesh) self.postMessage(msg, [mesh.walls.buffer, mesh.wallIndices.buffer, mesh.wallSegments.buffer, mesh.parapetIndices.buffer, mesh.roofs.buffer, mesh.roofIndices.buffer, mesh.equipment.buffer, mesh.lights.buffer, mesh.balconies.buffer, mesh.balconyIndices.buffer, mesh.fixtures.buffer, mesh.fixtureIndices.buffer, mesh.pitchedRoofs.buffer, mesh.pitchedRoofIndices.buffer, mesh.trees.buffer, mesh.signals.buffer, mesh.grounds.buffer]);
+  if (mesh) self.postMessage(msg, [mesh.walls.buffer, mesh.wallIndices.buffer, mesh.wallSegments.buffer, mesh.parapetIndices.buffer, mesh.roofs.buffer, mesh.roofIndices.buffer, mesh.equipment.buffer, mesh.lights.buffer, mesh.balconies.buffer, mesh.balconyIndices.buffer, mesh.fixtures.buffer, mesh.fixtureIndices.buffer, mesh.pitchedRoofs.buffer, mesh.pitchedRoofIndices.buffer, mesh.trees.buffer, mesh.furniture.buffer, mesh.markings.buffer, mesh.markingIndices.buffer, mesh.grounds.buffer]);
   else self.postMessage(msg);
 }
 
@@ -62,15 +62,15 @@ function auxiliaryMesh(features: SourceFeature[], kind: 'vegetation' | 'furnitur
   }
   const reference = createReference(Number.isFinite(w) ? (w + e) / 2 : 0, Number.isFinite(s) ? (s + n) / 2 : 0);
   const { facadeLengths, ...empty } = new FacadeMeshBuilder(reference).build();
-  let mesh: FacadeMesh, count: number;
+  let mesh: FacadeMesh, counts: Partial<BuildingStats>;
   if (kind === 'vegetation') {
     const veg = buildVegetation(features, reference);
     mesh = { ...empty, trees: veg.trees, grounds: veg.grounds, radius: veg.radius };
-    count = veg.count;
+    counts = { trees: veg.count };
   } else {
-    const sig = buildTrafficSignals(features, reference);
-    mesh = { ...empty, signals: sig.signals, grounds: sig.grounds, radius: sig.radius };
-    count = sig.count;
+    const frn = buildStreetFurniture(features, reference);
+    mesh = { ...empty, furniture: frn.parts, markings: frn.markings, markingIndices: frn.markingIndices, grounds: frn.grounds, radius: frn.radius };
+    counts = frn.counts;
   }
   const stats = {
     total: 0,
@@ -80,7 +80,7 @@ function auxiliaryMesh(features: SourceFeature[], kind: 'vegetation' | 'furnitur
     estimated: { height: 0, storeys: 0, category: 0 },
     facades: facadeLengths,
     bounds: [Infinity, Infinity, -Infinity, -Infinity] as [number, number, number, number],
-    ...(kind === 'vegetation' ? { trees: count } : { signals: count }),
+    ...counts,
   };
   return { mesh, stats };
 }

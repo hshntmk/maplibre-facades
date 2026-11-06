@@ -1794,40 +1794,49 @@ void main() {
 }
 `);
 
-/** 信号機の灯器・柱・腕木。底面のある単位立方体をインスタンスごとに拡大・回転して置く */
-export const SIGNAL_VS = /* glsl */ `#version 300 es
+/** 都市設備の部品（信号機・街灯・標識）。底面のある単位立方体をインスタンスごとに拡大・回転して置く */
+export const FURNITURE_VS = /* glsl */ `#version 300 es
 ${COMMON}
 uniform mat4 u_matrix;
+uniform vec3 u_show;                     // 信号機・街灯・標識を描くか（1 / 0）
+uniform float u_pass;                    // 0 = 部品, 1 = 街灯の路面の光
 layout(location = 0) in vec3 a_pos;      // 単位立方体（x, y: -0.5..0.5, z: 0..1）
 layout(location = 1) in vec3 a_normal;
-layout(location = 2) in vec3 a_inst0;    // 底面の中心 x, y, z（地面から）
-layout(location = 3) in vec3 a_inst1;    // length, depth, height
-layout(location = 4) in vec3 a_inst2;    // angle, part, group
-layout(location = 5) in vec3 a_inst3;    // offset, rows, ground
+layout(location = 2) in vec4 a_inst0;    // 底面の中心 x, y, z（地面から）, angle
+layout(location = 3) in vec4 a_inst1;    // length, depth, height, part
+layout(location = 4) in vec4 a_inst2;    // variant, phase, shape, owner
+layout(location = 5) in float a_ground;
 ${GROUND_VS}
 out vec3 v_world;
 out vec3 v_local;                        // 箱の中の位置 (m)。底面中心が原点
 flat out vec3 v_normal;
 flat out vec3 v_localNormal;
-flat out vec4 v_info;                    // part, group, offset, rows
+flat out vec4 v_info;                    // part, variant, phase, shape
 flat out vec3 v_size;
 void main() {
-  vec3 local = a_pos * a_inst1;
-  float ca = cos(a_inst2.x), sa = sin(a_inst2.x);
+  int part = int(a_inst1.w + 0.5);
+  int owner = int(a_inst2.w + 0.5);
+  bool pool = part == 6;
+  if (u_show[owner] < 0.5 || pool != (u_pass > 0.5)) {
+    gl_Position = vec4(2.0, 2.0, 2.0, 1.0); // クリップして描かない
+    return;
+  }
+  vec3 local = a_pos * a_inst1.xyz;
+  float ca = cos(a_inst0.w), sa = sin(a_inst0.w);
   vec2 xy = vec2(local.x * ca - local.y * sa, local.x * sa + local.y * ca);
-  vec3 p = vec3(a_inst0.xy + xy, a_inst0.z + groundOf(a_inst3.z) + local.z);
+  vec3 p = vec3(a_inst0.xy + xy, a_inst0.z + groundOf(a_ground) + local.z);
   v_world = p;
   v_local = local;
   v_localNormal = a_normal;
   v_normal = vec3(a_normal.x * ca - a_normal.y * sa, a_normal.x * sa + a_normal.y * ca, a_normal.z);
-  v_info = vec4(a_inst2.y, a_inst2.z, a_inst3.x, a_inst3.y);
-  v_size = a_inst1;
+  v_info = vec4(a_inst1.w, a_inst2.x, a_inst2.y, a_inst2.z);
+  v_size = a_inst1.xyz;
   gl_Position = u_matrix * vec4(p, 1.0);
   v_fogDepth = fogDepth(gl_Position);
 }
 `;
 
-export const SIGNAL_FS = withFog(/* glsl */ `#version 300 es
+const FURNITURE_FS_HEAD = /* glsl */ `#version 300 es
 ${COMMON}
 uniform float u_time;                    // 秒
 in vec3 v_world;
@@ -1837,7 +1846,11 @@ flat in vec3 v_localNormal;
 flat in vec4 v_info;
 flat in vec3 v_size;
 out vec4 fragColor;
+// 街灯の光の色（線形）: 0 = 白色（LED）, 1 = 橙色（高圧ナトリウム）
+vec3 lampColor(float variant) { return variant > 0.5 ? vec3(1.0, 0.55, 0.2) : vec3(1.0, 0.95, 0.85); }
+`;
 
+export const FURNITURE_FS = withFog(FURNITURE_FS_HEAD + /* glsl */ `
 // 灯色の周期 (s)。直交する 2 方向が半周期ずつ交互に青になる
 const float CYCLE = 60.0;
 const float GREEN = 26.0, YELLOW = 3.0, WALK = 20.0;
@@ -1862,6 +1875,76 @@ float person(vec2 p, float s) {
   return 1.0 - smoothstep(-aa, aa, min(head, body));
 }
 
+
+/** 標識の図柄。p は板の中心からの位置 (m)、h は板の半分の大きさ。戻り値の a = 0 は図柄の外（板の形の外） */
+vec4 signFace(vec2 p, vec2 h, int kind, int shape, float pick) {
+  const vec3 WHITE = vec3(0.92), BLUE = vec3(0.05, 0.25, 0.62), RED_S = vec3(0.78, 0.08, 0.08), YELLOW_S = vec3(0.95, 0.72, 0.08), BLACK = vec3(0.06), GREEN_S = vec3(0.05, 0.45, 0.25);
+  float aa = max(fwidth(p.x), 1e-4);
+  float s = min(h.x, h.y);
+  if (shape == 1) {
+    // 円: 規制標識
+    float r = length(p);
+    if (r > s) return vec4(0.0);
+    float ring = smoothstep(s * 0.78 - aa, s * 0.78 + aa, r);
+    if (pick < 0.55) {
+      // 赤い縁の白（最高速度・通行止めなど）。中に数字のような青い模様
+      vec2 q = abs(p - vec2(0.0, 0.0)) / s;
+      float digits = step(q.x, 0.42) * step(q.y, 0.3) * step(0.5, fract((p.x / s + 0.42) * 2.4 + 0.2 * step(0.1, q.y)));
+      return vec4(mix(mix(WHITE, BLUE, digits * 0.8), RED_S, ring), 1.0);
+    }
+    if (pick < 0.75) {
+      // 青に赤い縁と斜線（駐車禁止）
+      float slash = step(abs(p.x - p.y) * 0.7071, s * 0.09);
+      return vec4(mix(mix(BLUE, RED_S, slash), RED_S, ring), 1.0);
+    }
+    // 赤に白い横棒（車両進入禁止）
+    float bar = step(abs(p.x), s * 0.6) * step(abs(p.y), s * 0.14);
+    return vec4(mix(RED_S, WHITE, bar), 1.0);
+  }
+  if (shape == 2) {
+    // 逆三角形（止まれ）: 赤に白い縁
+    vec2 q = p / s;
+    float d = max(abs(q.x) * 0.866 + q.y * 0.5, -q.y) - 0.5;
+    if (d > 0.0) return vec4(0.0);
+    float rim = smoothstep(-0.09 - aa / s, -0.09 + aa / s, d);
+    float text = step(abs(q.y - 0.2), 0.07) * step(abs(q.x), 0.35) * step(0.5, fract(q.x * 6.0));
+    return vec4(mix(mix(RED_S, WHITE, text), WHITE, rim), 1.0);
+  }
+  if (shape == 3) {
+    // ひし形（警戒標識）: 黄に黒い縁と記号
+    vec2 q = abs(p) / s;
+    float d = q.x + q.y - 1.0;
+    if (d > 0.0) return vec4(0.0);
+    float rim = step(-0.12, d) * step(d, -0.05);
+    float mark = step(length(p / s), 0.25);
+    return vec4(mix(YELLOW_S, BLACK, max(rim, mark)), 1.0);
+  }
+  // 長方形
+  vec2 e = h - abs(p);
+  float border = step(min(e.x, e.y), 0.025);
+  // 文字の代わりの短い棒の並び
+  float rows = max(floor(h.y * 2.0 / 0.16), 1.0);
+  float row = floor((p.y + h.y) / (h.y * 2.0) * rows);
+  float inRow = abs(fract((p.y + h.y) / (h.y * 2.0) * rows) - 0.5);
+  float col = floor((p.x + h.x) / 0.09);
+  float glyph = step(inRow, 0.22) * step(0.35, hash12(vec2(col, row + pick * 31.0))) * step(0.06, e.x) * step(0.05, e.y);
+  if (kind == 4) return vec4(mix(mix(WHITE, BLACK, glyph * 0.85), BLACK, border * 0.7), 1.0); // 補助標識: 白に黒
+  if (kind == 3) {
+    // 指示標識: 青に白い三角
+    vec2 q = p / s;
+    float tri = step(max(abs(q.x) * 0.866 - q.y * 0.5, q.y) , 0.42) ;
+    return vec4(mix(mix(BLUE, WHITE, tri), WHITE, border), 1.0);
+  }
+  if (kind == 2) {
+    // 長方形の規制標識（一方通行）: 青に白い矢印
+    float arrow = step(abs(p.y), h.y * 0.18) * step(abs(p.x), h.x * 0.6) + step(abs(p.y) - (h.x * 0.85 - p.x), 0.0) * step(h.x * 0.45, p.x) * step(p.x, h.x * 0.85);
+    return vec4(mix(mix(BLUE, WHITE, min(arrow, 1.0)), WHITE, border), 1.0);
+  }
+  // 案内標識: 青（一部は緑）に白い文字
+  vec3 ground = pick > 0.85 ? GREEN_S : BLUE;
+  return vec4(mix(mix(ground, WHITE, glyph), WHITE, border), 1.0);
+}
+
 void main() {
   int part = int(v_info.x + 0.5);
   if (u_debug > 0) {
@@ -1872,6 +1955,32 @@ void main() {
   // 柱・腕木: 亜鉛めっきの灰色
   if (part == 0) {
     fragColor = vec4(toDisplay(toLinear(vec3(0.6, 0.61, 0.6)) * light), 1.0);
+    return;
+  }
+  if (part == 4) {
+    // 街灯の灯具: 下面（柱の上に載せた形は上面以外）が光る
+    bool globe = v_info.w > 0.5;
+    bool lens = globe ? v_localNormal.z < 0.5 : v_localNormal.z < -0.5;
+    vec3 c = toLinear(vec3(0.35, 0.36, 0.36)) * light;
+    if (lens) c = mix(toLinear(vec3(0.75)) * light, lampColor(v_info.y) * 4.0, u_night);
+    fragColor = vec4(toDisplay(c), 1.0);
+    return;
+  }
+  if (part == 5) {
+    // 標識: 両面に図柄、縁は灰色
+    int shape = int(v_info.w + 0.5);
+    if (abs(v_localNormal.y) < 0.5) {
+      if (shape != 0) discard;
+      fragColor = vec4(toDisplay(toLinear(vec3(0.55)) * light), 1.0);
+      return;
+    }
+    // 裏面は左右を反転して、どちらから見ても同じ向きにする
+    vec2 p = vec2(v_local.x * sign(v_localNormal.y), v_local.z - v_size.z * 0.5);
+    vec4 face = signFace(p, vec2(v_size.x, v_size.z) * 0.5, int(v_info.y + 0.5), shape, v_info.z);
+    if (face.a < 0.5) discard;
+    // 反射材: 夜は車のライトで少し明るく見える
+    vec3 c = toLinear(face.rgb) * (light + vec3(0.06) * u_night);
+    fragColor = vec4(toDisplay(c), 1.0);
     return;
   }
   vec3 body = toLinear(vec3(0.5, 0.51, 0.5));
@@ -1939,6 +2048,55 @@ void main() {
     c = mix(plate, vec3(0.0), clamp(cover, 0.0, 1.0)) + emit;
   }
   fragColor = vec4(toDisplay(c), 1.0);
+}
+`);
+
+/** 街灯が路面を照らす光だまり。加算合成で描く（霞の中では薄める） */
+export const FURNITURE_POOL_FS = FURNITURE_FS_HEAD + FOG_FS + /* glsl */ `
+void main() {
+  float d = length(v_local.xy) / (v_size.x * 0.5);
+  float a = pow(max(1.0 - d, 0.0), 2.2);
+  vec3 c = lampColor(v_info.y) * a * 0.22 * u_night;
+  fragColor = vec4(c * (1.0 - clamp(fogAmount(), 0.0, 1.0)), 1.0);
+}
+`;
+
+/** 路面標示（横断歩道・停止線・区画線など）。白い塗料 */
+export const MARKING_VS = /* glsl */ `#version 300 es
+${COMMON}
+uniform mat4 u_matrix;
+layout(location = 0) in vec3 a_pos;
+layout(location = 1) in vec2 a_info;     // kind, ground
+${GROUND_VS}
+out vec3 v_world;
+flat out float v_kind;
+void main() {
+  vec3 p = a_pos + vec3(0.0, 0.0, groundOf(a_info.y));
+  v_world = p;
+  v_kind = a_info.x;
+  gl_Position = u_matrix * vec4(p, 1.0);
+  v_fogDepth = fogDepth(gl_Position);
+}
+`;
+
+export const MARKING_FS = withFog(/* glsl */ `#version 300 es
+${COMMON}
+in vec3 v_world;
+flat in float v_kind;
+out vec4 fragColor;
+float noise2(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash12(i), hash12(i + vec2(1, 0)), f.x), mix(hash12(i + vec2(0, 1)), hash12(i + vec2(1, 1)), f.x), f.y);
+}
+void main() {
+  // 塗料のかすれ（遠くでは平均）
+  float px = length(fwidth(v_world.xy));
+  float wear = mix(noise2(v_world.xy * 1.7) * 0.6 + noise2(v_world.xy * 7.0 + 3.0) * 0.4, 0.5, smoothstep(0.1, 0.5, px));
+  float paint = mix(0.62, 0.86, wear);
+  if (u_debug > 0) paint = 0.8;
+  vec3 c = toLinear(vec3(paint)) * surfaceLight(vec3(0.0, 0.0, 1.0)) + vec3(1.0, 0.9, 0.75) * 0.02 * u_night;
+  fragColor = vec4(toDisplay(c), 0.9);
 }
 `);
 

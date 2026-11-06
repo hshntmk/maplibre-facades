@@ -93,8 +93,11 @@ export interface BuildingStats {
   bounds: [number, number, number, number];
   /** 植生のタイルで描いた木の本数 */
   trees?: number;
-  /** 都市設備のタイルで描いた信号機の灯器の数 */
+  /** 都市設備のタイルで描いた信号機の灯器・街灯・標識・路面標示の数 */
   signals?: number;
+  lights?: number;
+  signs?: number;
+  markings?: number;
 }
 
 /** タイル 1 つの処理時間 (ms) */

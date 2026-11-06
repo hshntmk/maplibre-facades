@@ -1,5 +1,5 @@
 // PLATEAU 都市設備モデル（LOD1, 3D Tiles）。デモの都市のうち LOD1 の都市設備がある所（東京の一部の区）。PLATEAU データカタログ API から生成
-// 都市設備は区の一部（調査した範囲の通り）だけにある。描くのは交通信号機と、灯器を取り付けた柱
+// 都市設備は区の一部（調査した範囲の通り）だけにある。描くのは信号機・街灯・道路標識・路面標示と、それらを取り付けた柱
 // https://api.plateau.reearth.io/datacatalog/plateau-datasets
 
 export const FURNITURE_TILESETS: { id: string; name: string; url: string }[] = [

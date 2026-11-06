@@ -245,6 +245,9 @@ $<HTMLInputElement>('balconies').addEventListener('change', (e) => layer.setBalc
 $<HTMLInputElement>('solid-fixtures').addEventListener('change', (e) => layer.setSolidFixtures((e.target as HTMLInputElement).checked));
 $<HTMLInputElement>('vegetation').addEventListener('change', (e) => layer.setVegetation((e.target as HTMLInputElement).checked));
 $<HTMLInputElement>('traffic-signals').addEventListener('change', (e) => layer.setTrafficSignals((e.target as HTMLInputElement).checked));
+$<HTMLInputElement>('street-lights').addEventListener('change', (e) => layer.setStreetLights((e.target as HTMLInputElement).checked));
+$<HTMLInputElement>('road-signs').addEventListener('change', (e) => layer.setRoadSigns((e.target as HTMLInputElement).checked));
+$<HTMLInputElement>('road-markings').addEventListener('change', (e) => layer.setRoadMarkings((e.target as HTMLInputElement).checked));
 $<HTMLSelectElement>('season').addEventListener('change', (e) => layer.setSeason((e.target as HTMLSelectElement).value as Season));
 const checked = (id: string) => $<HTMLInputElement>(id).checked;
 const updateRoof = () =>

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createReference } from '../src/mesh/FacadeMeshBuilder';
-import { SIGNAL_STRIDE } from '../src/mesh/layout';
-import { SIGNAL_PARTS, buildTrafficSignals } from '../src/mesh/TrafficSignals';
+import { FURNITURE_STRIDE, MARKING_STRIDE } from '../src/mesh/layout';
+import { FURNITURE_OWNERS, FURNITURE_PARTS as SIGNAL_PARTS, SIGN_KINDS, buildStreetFurniture } from '../src/mesh/StreetFurniture';
 import type { SourceFeature } from '../src/sources/SourceConfig';
 import { isFurnitureTile, isVegetationTile } from '../src/sources/tiles3d/Tileset';
 
@@ -18,10 +18,11 @@ const feature = (code: string, ring: [number, number][], zmin: number, zmax: num
   geometry: { kind: 'footprint', polygons: [[ring]] },
 });
 const read = (s: Float32Array, i: number) => {
-  const o = i * SIGNAL_STRIDE;
-  return { x: s[o], y: s[o + 1], z: s[o + 2], length: s[o + 3], depth: s[o + 4], height: s[o + 5], angle: s[o + 6], part: s[o + 7], group: s[o + 8], rows: s[o + 10] };
+  const o = i * FURNITURE_STRIDE;
+  return { x: s[o], y: s[o + 1], z: s[o + 2], angle: s[o + 3], length: s[o + 4], depth: s[o + 5], height: s[o + 6], part: s[o + 7], group: s[o + 8], rows: s[o + 10], owner: s[o + 11] };
 };
-const all = (s: Float32Array) => Array.from({ length: s.length / SIGNAL_STRIDE }, (_, i) => read(s, i));
+const all = (s: Float32Array) => Array.from({ length: s.length / FURNITURE_STRIDE }, (_, i) => read(s, i)).filter((p) => p.owner === FURNITURE_OWNERS.signal);
+const everything = (s: Float32Array) => Array.from({ length: s.length / FURNITURE_STRIDE }, (_, i) => read(s, i));
 /** 灯面の向き（局所 +y を angle だけ回したもの） */
 const faceOf = (angle: number) => [-Math.sin(angle), Math.cos(angle)];
 
@@ -35,11 +36,11 @@ const intersection = (): SourceFeature[] => [
   feature('4200', rect(0, -12, 0.4, 3), 40.1, 50, 'light'),
 ];
 
-describe('buildTrafficSignals', () => {
+describe('buildStreetFurniture: traffic signals', () => {
   it('classifies heads by shape and puts them at their height above the ground', () => {
-    const r = buildTrafficSignals(intersection(), reference);
-    expect(r.count).toBe(3);
-    const heads = all(r.signals).filter((p) => p.part !== SIGNAL_PARTS.pole);
+    const r = buildStreetFurniture(intersection(), reference);
+    expect(r.counts.signals).toBe(3);
+    const heads = all(r.parts).filter((p) => p.part !== SIGNAL_PARTS.pole);
     const veh = heads.filter((p) => p.part === SIGNAL_PARTS.vehicle);
     expect(veh.length).toBe(2);
     for (const h of veh) {
@@ -54,8 +55,8 @@ describe('buildTrafficSignals', () => {
   });
 
   it('builds a pole at the far end of the arm and an arm along the heads', () => {
-    const r = buildTrafficSignals(intersection(), reference);
-    const metal = all(r.signals).filter((p) => p.part === SIGNAL_PARTS.pole);
+    const r = buildStreetFurniture(intersection(), reference);
+    const metal = all(r.parts).filter((p) => p.part === SIGNAL_PARTS.pole);
     // 北の柱: 灯器（x = -3）から遠い東の端に立つ
     const north = metal.filter((p) => Math.abs(p.y - 10) < 0.5);
     const pole = north.find((p) => p.height > 7)!;
@@ -68,8 +69,8 @@ describe('buildTrafficSignals', () => {
   });
 
   it('faces vehicle heads away from the intersection and gives crossing directions different groups', () => {
-    const r = buildTrafficSignals(intersection(), reference);
-    const veh = all(r.signals).filter((p) => p.part === SIGNAL_PARTS.vehicle);
+    const r = buildStreetFurniture(intersection(), reference);
+    const veh = all(r.parts).filter((p) => p.part === SIGNAL_PARTS.vehicle);
     const north = veh.find((p) => p.y > 5)!;
     const east = veh.find((p) => p.x > 5)!;
     expect(faceOf(north.angle)[1]).toBeCloseTo(1, 3);
@@ -78,7 +79,7 @@ describe('buildTrafficSignals', () => {
   });
 
   it('turns back-to-back heads away from each other', () => {
-    const r = buildTrafficSignals(
+    const r = buildStreetFurniture(
       [
         feature('4800', rect(2, 0, 5, 0.4), 40, 47.6, 'pole'),
         feature('4900', rect(0, 0.4, 1.15, 0.5), 45.6, 46.4, 'a'),
@@ -86,7 +87,7 @@ describe('buildTrafficSignals', () => {
       ],
       reference,
     );
-    const veh = all(r.signals).filter((p) => p.part === SIGNAL_PARTS.vehicle);
+    const veh = all(r.parts).filter((p) => p.part === SIGNAL_PARTS.vehicle);
     expect(veh.length).toBe(2);
     const [a, b] = veh.map((p) => faceOf(p.angle));
     expect(a[0] * b[0] + a[1] * b[1]).toBeCloseTo(-1, 3);
@@ -95,7 +96,7 @@ describe('buildTrafficSignals', () => {
   });
 
   it('adds a slim pole under a head that has none, and ignores other furniture', () => {
-    const r = buildTrafficSignals(
+    const r = buildStreetFurniture(
       [
         feature('4900', rect(0, 0, 0.28, 0.3), 43.2, 43.9, 'ped'),
         feature('4200', rect(3, 0, 0.4, 3), 40, 50, 'light'),
@@ -103,12 +104,67 @@ describe('buildTrafficSignals', () => {
       ],
       reference,
     );
-    expect(r.count).toBe(1);
-    const parts = all(r.signals);
+    expect(r.counts.signals).toBe(1);
+    const parts = all(r.parts);
     expect(parts.length).toBe(2);
     const pole = parts.find((p) => p.part === SIGNAL_PARTS.pole)!;
     expect(pole.z).toBe(0);
     expect(pole.height).toBeGreaterThan(3.9);
+  });
+});
+
+describe('buildStreetFurniture: lights, signs and markings', () => {
+  it('stands a street light at the thicker end of its outline and hangs the lamp at the other end', () => {
+    // 柱の根元（太い）は x = 0 付近、腕木は x = -5 まで細く伸びる
+    const ring: [number, number][] = [...rect(-0.1, 0, 0.6, 0.7), ...rect(-2.5, 0, 4.6, 0.12), ...rect(-4.8, 0, 0.5, 0.35)];
+    const r = buildStreetFurniture([feature('4200', ring, 40, 50.5, 'light')], reference);
+    expect(r.counts.lights).toBe(1);
+    const parts = everything(r.parts).filter((p) => p.owner === FURNITURE_OWNERS.light);
+    const pole = parts.find((p) => p.part === SIGNAL_PARTS.pole && p.height > 10)!;
+    const lamp = parts.find((p) => p.part === SIGNAL_PARTS.luminaire)!;
+    const pool = parts.find((p) => p.part === SIGNAL_PARTS.lightPool)!;
+    expect(pole.x).toBeGreaterThan(-0.6);
+    expect(lamp.x).toBeLessThan(-4);
+    expect(lamp.z).toBeGreaterThan(9.5);
+    expect(pool.x).toBeCloseTo(lamp.x, 3);
+    expect(pool.length).toBeGreaterThan(9);
+  });
+
+  it('draws sign plates with a kind from the function code and a pole when nothing holds them', () => {
+    const r = buildStreetFurniture(
+      [
+        feature('3130', rect(0, 0, 0.6, 0.04), 43, 43.6, 'reg'),
+        feature('3150', rect(0, 0, 0.6, 0.04), 42.7, 42.95, 'aux'),
+        feature('4200', rect(8, 0, 0.4, 0.4), 40, 50, 'light'),
+      ],
+      reference,
+    );
+    expect(r.counts.signs).toBe(2);
+    const parts = everything(r.parts).filter((p) => p.owner === FURNITURE_OWNERS.sign);
+    const plates = parts.filter((p) => p.part === SIGNAL_PARTS.sign);
+    expect(plates.map((p) => p.group).sort()).toEqual([SIGN_KINDS.regulatory, SIGN_KINDS.auxiliary].sort());
+    const reg = plates.find((p) => p.group === SIGN_KINDS.regulatory)!;
+    // 地面は近くの街灯の根元（40m）
+    expect(reg.z).toBeCloseTo(3, 1);
+    expect(reg.length).toBeCloseTo(0.6, 1);
+    // 正方形に近い規制標識は円か逆三角形
+    expect([1, 2]).toContain(reg.rows);
+    expect(parts.filter((p) => p.part === SIGNAL_PARTS.pole).length).toBe(2);
+  });
+
+  it('triangulates road markings as flat paint just above the road', () => {
+    const r = buildStreetFurniture(
+      [
+        { ...feature('1110', rect(0, 0, 0.45, 4), 40, 40, 'cw'), geometry: { kind: 'footprint', polygons: [[rect(0, 0, 0.45, 4)], [rect(0.9, 0, 0.45, 4)]] } },
+        feature('1120', rect(0, 4, 6, 0.3), 40, 40, 'stop'),
+      ],
+      reference,
+    );
+    expect(r.counts.markings).toBe(2);
+    expect(r.markingIndices.length).toBe(3 * 2 * 3);
+    const verts = r.markings.length / MARKING_STRIDE;
+    expect(verts).toBe(12);
+    for (let i = 0; i < verts; i++) expect(r.markings[i * MARKING_STRIDE + 2]).toBeCloseTo(0.04);
   });
 });
 
